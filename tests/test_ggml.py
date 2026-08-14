@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import io
 import os
+import pathlib
 import signal
 import sys
 import tarfile
@@ -681,3 +682,17 @@ class Sizes(DikteTest):
         self.assertEqual(ggml.human_size(512), "512 B")
         self.assertEqual(ggml.human_size(574041195), "547.4 MB")
         self.assertEqual(ggml.human_size(3_095_033_483), "2.9 GB")
+
+
+class DataDir(DikteTest):
+
+    def test_windows_keeps_programs_and_models_under_local_appdata(self):
+        with mock.patch.dict(os.environ,
+                             {"LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
+            self.assertEqual(str(ggml._data_dir("win32")),
+                             r"C:\Users\u\AppData\Local\Dikte")
+
+    def test_elsewhere_the_data_follows_xdg(self):
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/share"}):
+            self.assertEqual(str(ggml._data_dir("linux")),
+                             str(pathlib.Path("/tmp/share/dikte")))

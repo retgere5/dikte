@@ -22,11 +22,25 @@ def _directories(platform=None):
     """(settings, data), in the two places this system keeps them.
 
     macOS keeps both in the one directory a Mac user's backup already knows
-    about. Everywhere else they are separate and follow the XDG variables.
+    about. Windows splits them the way the platform does: settings in the
+    roaming profile, data (models, recordings) in the local one. Everywhere
+    else they are separate and follow the XDG variables.
     """
-    if (platform or sys.platform) == "darwin":
+    here = platform or sys.platform
+    if here == "darwin":
         support = pathlib.Path.home() / "Library/Application Support/Dikte"
         return support, support
+    if here == "win32":
+        # os.path.expanduser rather than pathlib.Path.home(): the latter raises
+        # when the environment carries none of HOME, USERPROFILE or HOMEDRIVE
+        # plus HOMEPATH, which a stripped-down environment can leave true on
+        # Windows; expanduser instead hands back the "~" unexpanded, which is
+        # still a usable path.
+        roaming = pathlib.Path(os.environ.get("APPDATA")
+                               or os.path.expanduser("~/AppData/Roaming"))
+        local = pathlib.Path(os.environ.get("LOCALAPPDATA")
+                             or os.path.expanduser("~/AppData/Local"))
+        return roaming / "Dikte", local / "Dikte"
     return (_xdg("XDG_CONFIG_HOME", "~/.config") / "dikte",
             _xdg("XDG_DATA_HOME", "~/.local/share") / "dikte")
 

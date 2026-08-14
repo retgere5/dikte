@@ -51,8 +51,24 @@ HOST = "127.0.0.1"
 # The path api.py asks for, so its URL and the server's line up.
 INFERENCE_PATH = "/v1/audio/transcriptions"
 
-DATA_DIR = (pathlib.Path(os.environ.get("XDG_DATA_HOME")
+
+def _data_dir(platform=None):
+    """Where the fetched programs and models live.
+
+    The same place config.py's data half points at, derived here rather than
+    imported: config already imports this module.
+    """
+    if (platform or sys.platform) == "win32":
+        # expanduser rather than Path.home(): the latter raises when the
+        # environment has none of HOME, USERPROFILE or HOMEDRIVE plus
+        # HOMEPATH, where expanduser instead hands back "~" unexpanded.
+        local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+        return pathlib.Path(local) / "Dikte"
+    return (pathlib.Path(os.environ.get("XDG_DATA_HOME")
                          or os.path.expanduser("~/.local/share")) / "dikte")
+
+
+DATA_DIR = _data_dir()
 BIN_DIR = DATA_DIR / "bin"
 MODELS_DIR = DATA_DIR / "models"
 

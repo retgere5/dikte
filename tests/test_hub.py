@@ -1,6 +1,10 @@
 """What GitHub and Hugging Face are asked, and what is believed of the answer."""
 
 import json
+import os
+import pathlib
+import unittest
+from unittest import mock
 
 import hub
 from tests.support import DikteTest, fake_urlopen, http_error, url_error
@@ -182,3 +186,17 @@ class CacheOnDisk(DikteTest):
         with fake_urlopen(RELEASE):
             tag, _ = hub.release("ggml-org/whisper.cpp")
         self.assertEqual(tag, "v1.9.1")
+
+
+class CacheDir(unittest.TestCase):
+
+    def test_windows_keeps_the_cache_under_local_appdata(self):
+        with mock.patch.dict(os.environ,
+                             {"LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
+            self.assertEqual(str(hub._cache_dir("win32")),
+                             r"C:\Users\u\AppData\Local\Dikte\cache")
+
+    def test_elsewhere_the_cache_follows_xdg(self):
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": "/tmp/cache"}):
+            self.assertEqual(str(hub._cache_dir("linux")),
+                             str(pathlib.Path("/tmp/cache/dikte")))

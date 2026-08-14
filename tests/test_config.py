@@ -487,6 +487,28 @@ class Directories(unittest.TestCase):
             config_dir, _ = cfg._directories("darwin")
         self.assertNotIn("/c", str(config_dir))
 
+    def test_windows_splits_roaming_settings_from_local_data(self):
+        with mock.patch.dict(os.environ,
+                             {"APPDATA": r"C:\Users\u\AppData\Roaming",
+                              "LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
+            config_dir, data_dir = cfg._directories("win32")
+        self.assertEqual(str(config_dir), r"C:\Users\u\AppData\Roaming\Dikte")
+        self.assertEqual(str(data_dir), r"C:\Users\u\AppData\Local\Dikte")
+
+    def test_windows_missing_the_variables_still_lands_in_the_profile(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config_dir, data_dir = cfg._directories("win32")
+        self.assertIn("Dikte", str(config_dir))
+        self.assertIn("Dikte", str(data_dir))
+
+    def test_windows_does_not_read_the_xdg_variables(self):
+        with mock.patch.dict(os.environ,
+                             {"XDG_CONFIG_HOME": "/tmp/xdg",
+                              "APPDATA": r"C:\Users\u\AppData\Roaming",
+                              "LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
+            config_dir, _ = cfg._directories("win32")
+        self.assertNotIn("xdg", str(config_dir))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ import collections
 import json
 import os
 import pathlib
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -32,8 +33,19 @@ HF_API = "https://huggingface.co/api"
 HF_FILES = "https://huggingface.co"
 USER_AGENT = "dikte/1.0 (+https://github.com/yusufipk/dikte)"
 
-CACHE_DIR = (pathlib.Path(os.environ.get("XDG_CACHE_HOME")
-                          or os.path.expanduser("~/.cache")) / "dikte")
+
+def _cache_dir(platform=None):
+    if (platform or sys.platform) == "win32":
+        # expanduser rather than Path.home(): the latter raises when the
+        # environment has none of HOME, USERPROFILE or HOMEDRIVE plus
+        # HOMEPATH, where expanduser instead hands back "~" unexpanded.
+        local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+        return pathlib.Path(local) / "Dikte" / "cache"
+    return (pathlib.Path(os.environ.get("XDG_CACHE_HOME")
+                         or os.path.expanduser("~/.cache")) / "dikte")
+
+
+CACHE_DIR = _cache_dir()
 # Long enough that opening the settings window twice in an evening asks nobody
 # anything, short enough that a model published this morning is offered today.
 CACHE_TTL = 6 * 3600

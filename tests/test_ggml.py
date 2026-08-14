@@ -689,8 +689,12 @@ class DataDir(DikteTest):
     def test_windows_keeps_programs_and_models_under_local_appdata(self):
         with mock.patch.dict(os.environ,
                              {"LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
-            self.assertEqual(str(ggml._data_dir("win32")),
-                             r"C:\Users\u\AppData\Local\Dikte")
+            data_dir = str(ggml._data_dir("win32"))
+        # Same portability concern as test_config.py's windows directory
+        # tests: a hardcoded backslash-literal full path only matches on a
+        # real WindowsPath, not on PosixPath (ubuntu-latest CI).
+        self.assertIn(r"C:\Users\u\AppData\Local", data_dir)
+        self.assertTrue(data_dir.endswith("Dikte"))
 
     def test_elsewhere_the_data_follows_xdg(self):
         with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/share"}):

@@ -193,8 +193,13 @@ class CacheDir(unittest.TestCase):
     def test_windows_keeps_the_cache_under_local_appdata(self):
         with mock.patch.dict(os.environ,
                              {"LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
-            self.assertEqual(str(hub._cache_dir("win32")),
-                             r"C:\Users\u\AppData\Local\Dikte\cache")
+            cache_dir = str(hub._cache_dir("win32"))
+        # Same portability concern as test_config.py's windows directory
+        # tests: a hardcoded backslash-literal full path only matches on a
+        # real WindowsPath, not on PosixPath (ubuntu-latest CI).
+        self.assertIn(r"C:\Users\u\AppData\Local", cache_dir)
+        self.assertIn("Dikte", cache_dir)
+        self.assertTrue(cache_dir.endswith("cache"))
 
     def test_elsewhere_the_cache_follows_xdg(self):
         with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": "/tmp/cache"}):

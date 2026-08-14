@@ -492,8 +492,14 @@ class Directories(unittest.TestCase):
                              {"APPDATA": r"C:\Users\u\AppData\Roaming",
                               "LOCALAPPDATA": r"C:\Users\u\AppData\Local"}):
             config_dir, data_dir = cfg._directories("win32")
-        self.assertEqual(str(config_dir), r"C:\Users\u\AppData\Roaming\Dikte")
-        self.assertEqual(str(data_dir), r"C:\Users\u\AppData\Local\Dikte")
+        # The raw env var text has no forward slashes, so it survives as one
+        # opaque path component even under PosixPath on non-Windows CI; only
+        # the join with "Dikte" is platform-specific, hence endswith/assertIn
+        # rather than a hardcoded backslash-literal full path.
+        self.assertIn(r"C:\Users\u\AppData\Roaming", str(config_dir))
+        self.assertTrue(str(config_dir).endswith("Dikte"))
+        self.assertIn(r"C:\Users\u\AppData\Local", str(data_dir))
+        self.assertTrue(str(data_dir).endswith("Dikte"))
 
     def test_windows_missing_the_variables_still_lands_in_the_profile(self):
         with mock.patch.dict(os.environ, {}, clear=True):

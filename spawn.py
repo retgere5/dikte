@@ -17,7 +17,12 @@ import sys
 def flags():
     """creationflags for a child no console window should flash for."""
     if sys.platform == "win32":
-        return subprocess.CREATE_NO_WINDOW
+        # CREATE_NO_WINDOW only exists on the subprocess module built on a real
+        # Windows interpreter (CPython gates the _winapi import on _mswindows,
+        # decided once at interpreter startup, not on this mocked sys.platform),
+        # so a test standing here on another platform needs the same fallback
+        # value it asserts against.
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     return 0
 
 

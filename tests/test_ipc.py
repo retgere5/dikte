@@ -5,6 +5,7 @@ shortcut still sends a bare verb, and an instance from before replies existed
 answers by saying nothing at all.
 """
 
+import getpass
 import json
 import os
 import sys
@@ -70,6 +71,10 @@ class Paths(unittest.TestCase):
                          "has no equivalent of")
     def test_the_socket_is_per_user(self):
         self.assertEqual(ipc.SERVER_NAME, f"dikte-{os.getuid()}")
+
+    def test_windows_names_the_socket_after_the_user(self):
+        with mock.patch.object(getpass, "getuser", return_value="muhammed"):
+            self.assertEqual(ipc._server_name("win32"), "dikte-muhammed")
 
 
 class Send(unittest.TestCase):

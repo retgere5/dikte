@@ -8,13 +8,26 @@ understood, because that is what earlier versions sent and what a stale KDE
 shortcut may still send.
 """
 
+import getpass
 import json
 import os
 import sys
 
 from PyQt6.QtNetwork import QLocalSocket
 
-SERVER_NAME = "dikte-" + str(os.getuid())
+
+def _server_name(platform=None):
+    """One name per user: the uid where there is one, the login name on Windows.
+
+    Windows has no getuid, and QLocalSocket maps the name to a named pipe that
+    is already per session; the user name only keeps two accounts apart.
+    """
+    if (platform or sys.platform) == "win32":
+        return "dikte-" + getpass.getuser()
+    return "dikte-" + str(os.getuid())
+
+
+SERVER_NAME = _server_name()
 
 # Long enough for a process that is already running to answer, short enough that
 # "nothing is running" is not a noticeable pause in front of a key press.

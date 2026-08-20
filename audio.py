@@ -40,6 +40,28 @@ CHUNK_LATENCY_MS = round(CHUNK_FRAMES / RATE * 1000)
 MIN_FRAMES = int(RATE * 0.25)
 
 
+def _recording_stdin():
+    """A pipe on Windows, nothing elsewhere: "q" is how ffmpeg is stopped."""
+    return subprocess.PIPE if sys.platform == "win32" else None
+
+
+def _stop_gently(proc):
+    """Ask the recorder to finish without cutting the stream.
+
+    Not a signal on Windows: CTRL events need a console the windowless parent
+    does not have. ffmpeg watches its stdin for "q" instead, which also makes
+    it finish what it was writing.
+    """
+    if sys.platform == "win32":
+        try:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+        except (OSError, ValueError, AttributeError):
+            proc.kill()
+        return
+    proc.send_signal(signal.SIGINT)
+
+
 class Recorder(QObject):
     """Runs the available sound-server recorder and reads raw PCM from stdout."""
 
@@ -71,7 +93,9 @@ class Recorder(QObject):
 
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=_recording_stdin(), bufsize=0,
+                creationflags=spawn.flags(),
             )
         except OSError as exc:
             self.failed.emit(t("Could not start recording: {error}", error=exc))
@@ -126,7 +150,7 @@ class Recorder(QObject):
         proc = self._proc
         if proc and proc.poll() is None:
             try:
-                proc.send_signal(signal.SIGINT)
+                _stop_gently(proc)
                 proc.wait(timeout=1.5)
             except (subprocess.TimeoutExpired, OSError):
                 try:
@@ -247,7 +271,9 @@ class MeetingRecorder(QObject):
             # nobody drains would eventually block it, so it writes to a file.
             self._log = tempfile.TemporaryFile()
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=self._log, bufsize=0
+                cmd, stdout=subprocess.PIPE, stderr=self._log,
+                stdin=_recording_stdin(), bufsize=0,
+                creationflags=spawn.flags(),
             )
         except (OSError, wave.Error) as exc:
             self._close_file()
@@ -299,7 +325,7 @@ class MeetingRecorder(QObject):
         proc = self._proc
         if proc and proc.poll() is None:
             try:
-                proc.send_signal(signal.SIGINT)
+                _stop_gently(proc)
                 proc.wait(timeout=2)
             except (subprocess.TimeoutExpired, OSError):
                 try:
@@ -357,8 +383,9 @@ class MeetingRecorder(QObject):
             self._drop_log()
             return
 
-        # SIGINT is how the recording ends, and ffmpeg reports being interrupted
-        # as a failure; only complain when nothing was captured either.
+        # SIGINT (on Windows: "q" written to it) is how the recording ends,
+        # and ffmpeg reports being interrupted as a failure; only complain
+        # when nothing was captured either.
         if frames < MIN_FRAMES:
             tail = self._error_tail()
             self._drop_log()

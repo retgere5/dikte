@@ -465,6 +465,62 @@ class RecorderChain(OnLinux, DikteTest):
         self.assertFalse(recorder.active)
 
 
+class StopGently(DikteTest):
+
+    def test_linux_sends_sigint(self):
+        proc = mock.Mock()
+        with mock.patch.object(sys, "platform", "linux"):
+            audio._stop_gently(proc)
+        proc.send_signal.assert_called_once_with(audio.signal.SIGINT)
+
+    def test_windows_writes_q_to_ffmpeg(self):
+        proc = mock.Mock()
+        with mock.patch.object(sys, "platform", "win32"):
+            audio._stop_gently(proc)
+        proc.stdin.write.assert_called_once_with(b"q")
+        proc.stdin.flush.assert_called_once_with()
+        proc.kill.assert_not_called()
+
+    def test_windows_with_a_closed_stdin_kills_instead(self):
+        proc = mock.Mock()
+        proc.stdin.write.side_effect = OSError("broken pipe")
+        with mock.patch.object(sys, "platform", "win32"):
+            audio._stop_gently(proc)
+        proc.kill.assert_called_once_with()
+
+
+class RecorderSpawn(DikteTest):
+
+    def test_windows_hands_the_recorder_a_stdin_and_no_console(self):
+        recorder = audio.Recorder()
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(audio, "recording_command",
+                                  return_value=["ffmpeg", "-"]), \
+                mock.patch.object(audio.subprocess, "Popen") as popen:
+            popen.return_value.stdout.read.return_value = b""
+            popen.return_value.stderr.read.return_value = b""
+            recorder.start()
+            recorder._thread.join(timeout=2)
+        kwargs = popen.call_args.kwargs
+        self.assertEqual(kwargs.get("stdin"), audio.subprocess.PIPE)
+        self.assertEqual(kwargs.get("creationflags"),
+                         getattr(audio.subprocess, "CREATE_NO_WINDOW", 0x08000000))
+
+    def test_linux_leaves_stdin_alone(self):
+        recorder = audio.Recorder()
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(audio, "recording_command",
+                                  return_value=["parec"]), \
+                mock.patch.object(audio.subprocess, "Popen") as popen:
+            popen.return_value.stdout.read.return_value = b""
+            popen.return_value.stderr.read.return_value = b""
+            recorder.start()
+            recorder._thread.join(timeout=2)
+        kwargs = popen.call_args.kwargs
+        self.assertIsNone(kwargs.get("stdin"))
+        self.assertEqual(kwargs.get("creationflags", 0), 0)
+
+
 class MeetingCommand(unittest.TestCase):
     """One process reading both devices, because two would drift apart."""
 

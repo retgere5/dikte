@@ -492,6 +492,70 @@ class ParseMacShortcut(unittest.TestCase):
         self.assertEqual(hotkey.parse_macos_shortcut(None), (None, None))
 
 
+# --- Windows ----------------------------------------------------------------
+
+class ParseWindowsShortcut(unittest.TestCase):
+    def test_a_combination_windows_would_use(self):
+        self.assertEqual(hotkey.parse_windows_shortcut("Ctrl+Space"),
+                         (0x0002, 0x20))
+
+    def test_modifiers_or_together(self):
+        self.assertEqual(hotkey.parse_windows_shortcut("Ctrl+Alt+Space"),
+                         (0x0002 | 0x0001, 0x20))
+
+    def test_case_and_spacing_do_not_matter(self):
+        self.assertEqual(hotkey.parse_windows_shortcut(" ctrl + alt + a "),
+                         hotkey.parse_windows_shortcut("Ctrl+Alt+A"))
+
+    def test_the_names_a_windows_keyboard_uses(self):
+        for name in ("win", "super", "meta"):
+            with self.subTest(name=name):
+                self.assertEqual(hotkey.parse_windows_shortcut(f"{name}+space"),
+                                 (0x0008, 0x20))
+
+    def test_a_bare_modifier_is_refused(self):
+        self.assertEqual(hotkey.parse_windows_shortcut("Ctrl+Shift"), (None, None))
+
+    def test_an_unknown_key_is_refused(self):
+        self.assertEqual(hotkey.parse_windows_shortcut("Ctrl+ş"), (None, None))
+
+    def test_an_empty_string_is_refused(self):
+        self.assertEqual(hotkey.parse_windows_shortcut(""), (None, None))
+
+
+class WindowsChooser(DikteTest):
+    """What the shortcut verbs mean on win32: RegisterHotKey listens, but
+    there is no registry file for Settings to write into, same as macOS."""
+
+    def setUp(self):
+        super().setUp()
+        self.patch_attr(hotkey.sys, "platform", "win32")
+        self.addCleanup(hotkey._REGISTERED.clear)
+
+    def test_windows_keeps_no_shortcut_registry(self):
+        self.assertFalse(hotkey.installs_shortcuts())
+
+    def test_nothing_waits_for_a_login(self):
+        self.assertFalse(hotkey.shortcut_needs_restart())
+
+    def test_the_desktop_answers_to_windows(self):
+        self.assertEqual(hotkey.desktop_name(), "Windows")
+
+    def test_installing_remembers_like_a_mac(self):
+        ok, message = hotkey.install_shortcut("Ctrl+Space", "dikte toggle")
+        self.assertTrue(ok)
+        self.assertEqual(hotkey.shortcut_status(), "Ctrl+Space")
+        hotkey.remove_shortcut()
+        self.assertIsNone(hotkey.shortcut_status())
+
+    def test_nobody_lists_conflicts_beforehand(self):
+        self.assertEqual(hotkey.conflicting_shortcuts("Ctrl+Space"), [])
+
+    def test_a_windows_combination_validates(self):
+        self.assertTrue(hotkey.valid_shortcut("Ctrl+Space"))
+        self.assertFalse(hotkey.valid_shortcut("Ctrl+ş"))
+
+
 class FakeCarbon:
     """Enough of Carbon to watch what the listener asks it for.
 

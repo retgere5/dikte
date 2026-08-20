@@ -418,10 +418,66 @@ def _carbon():
     return carbon
 
 
+# --- Windows: RegisterHotKey ----------------------------------------------
+
+# RegisterHotKey's modifier bits, which are not the ones SendInput presses in
+# paste.py: the same four modifiers, numbered differently by two APIs.
+WIN_HOTKEY_MODS = {
+    "alt": 0x0001,
+    "ctrl": 0x0002, "control": 0x0002,
+    "shift": 0x0004,
+    "win": 0x0008, "super": 0x0008, "meta": 0x0008,
+}
+# Virtual-key codes for everything a shortcut can name.
+WIN_HOTKEY_KEYS = {
+    "space": 0x20, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
+    "esc": 0x1B, "escape": 0x1B, "backspace": 0x08,
+    "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
+    "pgup": 0x21, "pgdown": 0x22,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+    "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+    "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45, "f": 0x46,
+    "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A, "k": 0x4B, "l": 0x4C,
+    "m": 0x4D, "n": 0x4E, "o": 0x4F, "p": 0x50, "q": 0x51, "r": 0x52,
+    "s": 0x53, "t": 0x54, "u": 0x55, "v": 0x56, "w": 0x57, "x": 0x58,
+    "y": 0x59, "z": 0x5A,
+    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
+    "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
+    "f11": 0x7A, "f12": 0x7B,
+}
+MOD_NOREPEAT = 0x4000
+WM_HOTKEY = 0x0312
+WM_QUIT = 0x0012
+
+
+def parse_windows_shortcut(text):
+    """'Ctrl+Space' -> (2, 32): RegisterHotKey's modifier bits and the key."""
+    parts = [part.strip().lower() for part in str(text).split("+")
+             if part.strip()]
+    if not parts:
+        return None, None
+    modifiers, key = 0, None
+    for part in parts:
+        if part in WIN_HOTKEY_MODS:
+            modifiers |= WIN_HOTKEY_MODS[part]
+        elif key is None and part in WIN_HOTKEY_KEYS:
+            key = WIN_HOTKEY_KEYS[part]
+        else:
+            return None, None
+    if key is None:
+        return None, None
+    return modifiers, key
+
+
 # --- the desktop's own shortcut -------------------------------------------
 
 def _macos():
     return sys.platform == "darwin"
+
+
+def _windows():
+    return sys.platform == "win32"
 
 
 def _gnome():
@@ -553,7 +609,12 @@ def listener(parent=None):
 
 def valid_shortcut(text):
     """Whether this machine can bind the combination as it was typed."""
-    parse = parse_macos_shortcut if _macos() else parse_shortcut
+    if _macos():
+        parse = parse_macos_shortcut
+    elif _windows():
+        parse = parse_windows_shortcut
+    else:
+        parse = parse_shortcut
     return parse(text)[1] is not None
 
 
@@ -561,24 +622,24 @@ def installs_shortcuts():
     """Whether this system keeps a shortcut registry to write into.
 
     KDE and GNOME do, and something outside Dikte reads it, so the combination
-    survives Dikte being closed. macOS does not: there is nothing to install,
-    nothing to remove, and Settings should not offer either.
+    survives Dikte being closed. macOS and Windows do not: there is nothing to
+    install, nothing to remove, and Settings should not offer either.
     """
-    return not _macos()
+    return not _macos() and not _windows()
 
 
 def shortcut_needs_restart():
     """Whether an installed shortcut waits for the next login before it works.
 
     KWin reads kglobalshortcutsrc once, when it starts. GNOME picks a binding
-    up as it is written, and macOS never had one to write.
+    up as it is written, and macOS and Windows never had one to write.
     """
-    return not _macos() and not _gnome()
+    return installs_shortcuts() and not _gnome()
 
 
 def install_shortcut(shortcut, exec_command, name="Dikte: start/stop recording",
                      desktop_id=DESKTOP_ID):
-    if _macos():
+    if _macos() or _windows():
         _REGISTERED[desktop_id] = shortcut
         return True, t(
             "Shortcut saved: {shortcut}\nDikte holds this one itself while it "
@@ -591,7 +652,7 @@ def install_shortcut(shortcut, exec_command, name="Dikte: start/stop recording",
 
 
 def remove_shortcut(desktop_id=DESKTOP_ID):
-    if _macos():
+    if _macos() or _windows():
         _REGISTERED.pop(desktop_id, None)
     elif _gnome():
         remove_gnome_shortcut(desktop_id)
@@ -600,7 +661,7 @@ def remove_shortcut(desktop_id=DESKTOP_ID):
 
 
 def shortcut_status(desktop_id=DESKTOP_ID):
-    if _macos():
+    if _macos() or _windows():
         return _REGISTERED.get(desktop_id)
     return (gnome_shortcut_status(desktop_id) if _gnome()
             else kde_shortcut_status(desktop_id))
@@ -609,6 +670,8 @@ def shortcut_status(desktop_id=DESKTOP_ID):
 def desktop_name():
     if _macos():
         return "macOS"
+    if _windows():
+        return "Windows"
     return "GNOME" if _gnome() else "KDE"
 
 
@@ -693,9 +756,10 @@ def kde_shortcut_status(desktop_id=DESKTOP_ID):
 
 def conflicting_shortcuts(shortcut, desktop_id=DESKTOP_ID):
     """Names of other KDE entries bound to the same combination."""
-    if _macos():
-        # There is no list to read: macOS answers the question by refusing the
-        # registration, which CarbonHotkey reports when it asks for the key.
+    if _macos() or _windows():
+        # There is no list to read: macOS and Windows answer the question by
+        # refusing the registration, which CarbonHotkey and the win32 listener
+        # report when they ask for the key.
         return []
     try:
         text = SHORTCUTS_FILE.read_text(encoding="utf-8")

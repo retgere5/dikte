@@ -14,6 +14,7 @@ from unittest import mock
 import api
 import cleanup
 import ggml
+import spawn
 from tests.support import DikteTest, fake_urlopen, sent_json, url_error
 from tests.test_api import FakeServer, chat_reply
 
@@ -91,6 +92,10 @@ class ClaudeCode(DikteTest):
         super().setUp()
         self.conf = self.config(cleanup_provider="claude")
         self.patch_attr(cleanup.shutil, "which", lambda name: f"/usr/bin/{name}")
+        # Command construction is under test here, not PATH resolution, which
+        # tests/test_spawn.py covers on its own; resolving for real would rename
+        # cmd[0] on this machine and break the assertions below.
+        self.patch_attr(cleanup.spawn, "resolve", lambda cmd: cmd)
 
     def run_cleanup(self, text="uh, book it", **kwargs):
         patcher, calls = fake_run(**kwargs)
@@ -156,11 +161,23 @@ class ClaudeCode(DikteTest):
         self.assertIn("180", str(caught.exception))
 
 
+class Output(DikteTest):
+    """_output is what actually runs the CLI; both claude and codex go through it."""
+
+    def test_it_runs_without_a_console_window(self):
+        with mock.patch.object(cleanup.shutil, "which", return_value="/usr/bin/claude"), \
+                mock.patch.object(subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
+            cleanup._output(["claude", "-p", "hi"], 180, "Claude")
+        self.assertEqual(run.call_args.kwargs.get("creationflags", 0), spawn.flags())
+
+
 class Codex(DikteTest):
     def setUp(self):
         super().setUp()
         self.conf = self.config(cleanup_provider="codex")
         self.patch_attr(cleanup.shutil, "which", lambda name: f"/usr/bin/{name}")
+        self.patch_attr(cleanup.spawn, "resolve", lambda cmd: cmd)
 
     def run_cleanup(self, text="uh, book it", **kwargs):
         patcher, calls = fake_run(**kwargs)

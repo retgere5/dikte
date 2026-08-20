@@ -61,9 +61,10 @@ class Overlay(QWidget):
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
-        if sys.platform != "darwin":
-            # It is the window manager that would otherwise move this out of
-            # the corner. macOS has no such hint, and Qt warns about it.
+        if sys.platform not in ("darwin", "win32"):
+            # It is the X11 window manager that would otherwise move this out
+            # of the corner. macOS has no such hint and Qt warns about it;
+            # Windows simply has no window manager to bypass.
             flags |= Qt.WindowType.X11BypassWindowManagerHint
         # One that can be clicked away has to receive the click, which means it
         # also swallows one aimed at whatever is underneath it. The rest stay

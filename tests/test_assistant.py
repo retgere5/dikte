@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 import assistant
+import spawn
 from tests.support import DikteTest, fake_urlopen, only_these_tools
 
 
@@ -39,6 +40,24 @@ class FakeCli:
 
     def kill(self):
         self.killed = True
+
+
+class Stream(DikteTest):
+    """_stream is what actually starts the CLI; every provider runs through it."""
+
+    def test_the_cli_runs_without_a_console_window(self):
+        with mock.patch.object(assistant.subprocess, "Popen") as popen:
+            popen.return_value.stdout = iter(())
+            popen.return_value.stderr.read.return_value = ""
+            popen.return_value.wait.return_value = 0
+            popen.return_value.poll.return_value = 0
+            try:
+                assistant._stream(["claude", "-p", "hi"], self.config(),
+                                  lambda event: None, lambda: False)
+            except Exception:
+                pass   # only the spawn arguments are under test here
+        self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
+                         spawn.flags())
 
 
 class Provider(DikteTest):
@@ -300,7 +319,11 @@ class AskClaude(DikteTest):
             {"type": "result", "session_id": "abc", "result": "  done  "},
         ], code=code, stderr=stderr, noise=noise)
         stages = []
+        # Command construction is under test here, not PATH resolution, which
+        # tests/test_spawn.py covers on its own; resolving for real would rename
+        # cmd[0] on this machine and break the assertions below.
         with only_these_tools("claude", "codex"), \
+                mock.patch.object(assistant.spawn, "resolve", side_effect=lambda cmd: cmd), \
                 mock.patch.object(subprocess, "Popen", return_value=proc) as popen:
             result = assistant._ask_claude(
                 "book it", conf, session, stages.append, None)
@@ -381,6 +404,7 @@ class AskClaude(DikteTest):
         proc = FakeCli(code=0)
         proc.stdout = io.StringIO('{"type": "result", "result": "done"}\n[1,2]\n')
         with only_these_tools("claude"), \
+                mock.patch.object(assistant.spawn, "resolve", side_effect=lambda cmd: cmd), \
                 mock.patch.object(subprocess, "Popen", return_value=proc):
             answer, _ = assistant._ask_claude("hi", self.config(), "", None, None)
         self.assertEqual(answer, "done")
@@ -395,7 +419,10 @@ class AskCodex(DikteTest):
              "item": {"type": "agent_message", "text": "done"}},
         ])
         stages = []
+        # Same as AskClaude.run_ask: keep PATH resolution out of a test that is
+        # about the argument list, not about where the binary lives.
         with only_these_tools("codex"), \
+                mock.patch.object(assistant.spawn, "resolve", side_effect=lambda cmd: cmd), \
                 mock.patch.object(subprocess, "Popen", return_value=proc) as popen:
             result = assistant._ask_codex("book it", conf, session,
                                           stages.append, None)

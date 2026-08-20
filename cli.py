@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
 
@@ -32,6 +33,7 @@ import hotkey
 import ipc
 import meeting
 import paste
+import spawn
 
 NOT_RUNNING = 3
 
@@ -129,11 +131,19 @@ def _ask_instance(opts, cmd, wait=False, **args):
 
 
 def launch_gui(verb=""):
-    """No instance running, so become the application itself."""
+    """No instance running, so become the application itself.
+
+    exec does not replace a process on Windows: the parent would linger and
+    share its console with the child. A fresh detached process and a plain
+    exit land in the same place.
+    """
     args = [sys.executable, ipc.script_path()]
     if verb:
         args.append(verb)
     args.append("--gui")
+    if sys.platform == "win32":
+        subprocess.Popen(args, close_fds=True, creationflags=spawn.flags())
+        raise SystemExit(0)
     os.execv(sys.executable, args)
 
 

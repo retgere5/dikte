@@ -15,6 +15,7 @@ from unittest import mock
 
 import api
 import filetranscribe as ft
+import spawn
 from tests.support import DikteTest, make_wav, silence, tone
 
 
@@ -267,6 +268,21 @@ class Chunks(DikteTest):
         self.assertEqual(chunks[0][1], 0.0)
         for path, _ in chunks:
             self.assertTrue(path.endswith(".mp3"))
+
+
+class Ffmpeg(unittest.TestCase):
+    """_ffmpeg is what actually runs the converter; _to_wav and _to_mp3 both
+    go through it."""
+
+    def test_it_runs_without_a_console_window(self):
+        with mock.patch.object(ft.subprocess, "Popen") as popen, \
+                mock.patch.object(ft.os.path, "exists", return_value=True):
+            popen.return_value.communicate.return_value = ("", "")
+            popen.return_value.returncode = 0
+            popen.return_value.poll.return_value = 0
+            ft._ffmpeg(["-i", "in.wav"], "out.wav")
+        self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
+                         spawn.flags())
 
 
 class Transcriber(DikteTest):

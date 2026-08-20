@@ -31,6 +31,7 @@ import time
 
 import api
 import config as cfg
+import spawn
 from i18n import t
 
 SESSION_FILE = cfg.DATA_DIR / "assistant.json"
@@ -375,9 +376,10 @@ def _stream(cmd, conf, on_event, should_stop):
     """
     try:
         proc = subprocess.Popen(
-            cmd, cwd=working_dir(conf), stdin=subprocess.DEVNULL,
+            spawn.resolve(cmd), cwd=working_dir(conf), stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
+            creationflags=spawn.flags(),
         )
     except OSError as exc:
         raise AssistantError(t("Could not run {binary}: {error}",

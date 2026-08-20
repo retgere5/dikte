@@ -9,6 +9,7 @@ socket is faked, and everything that runs locally runs for real.
 import contextlib
 import io
 import json
+import sys
 import unittest
 from unittest import mock
 
@@ -521,6 +522,19 @@ class WithoutAnInstance(DikteTest):
             code = cli.run(["config", "get", "cleanup_model"])
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue().strip(), cfg.DEFAULTS["cleanup_model"])
+
+
+class WindowsLaunch(DikteTest):
+
+    def test_launch_gui_spawns_rather_than_execs_on_windows(self):
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(cli.subprocess, "Popen") as popen, \
+                self.assertRaises(SystemExit):
+            cli.launch_gui("toggle")
+        args = popen.call_args.args[0]
+        self.assertEqual(args[0], sys.executable)
+        self.assertIn("--gui", args)
+        self.assertIn("toggle", args)
 
 
 class Replies(DikteTest):

@@ -12,6 +12,7 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import sys
 import threading
 
@@ -43,6 +44,7 @@ import hotkey  # noqa: E402
 import i18n  # noqa: E402
 import ipc  # noqa: E402
 import meeting  # noqa: E402
+import spawn  # noqa: E402
 from i18n import t  # noqa: E402
 from meeting import MeetingPipeline  # noqa: E402
 from overlay import Overlay  # noqa: E402
@@ -881,6 +883,10 @@ class Dikte:
             self.settings_window.close()
         self.shutdown()
         QLocalServer.removeServer(SERVER_NAME)
+        if sys.platform == "win32":
+            subprocess.Popen([sys.executable, ipc.script_path(), "--gui"],
+                             close_fds=True, creationflags=spawn.flags())
+            os._exit(0)
         os.execv(sys.executable, [sys.executable, ipc.script_path(), "--gui"])
 
     def shutdown(self):
@@ -951,7 +957,10 @@ def install_signal_handlers(app):
         app.quit()          # aboutToQuit runs shutdown()
 
     notifier.activated.connect(woken)
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):      # not a thing Windows sends
+        signals.append(signal.SIGHUP)
+    for sig in signals:
         # A handler that does nothing, so that the default action, stopping the
         # process where it stands, is replaced by the wakeup above.
         signal.signal(sig, lambda *_: None)

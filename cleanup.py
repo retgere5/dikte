@@ -21,6 +21,7 @@ import tempfile
 import api
 import assistant
 import ggml
+import spawn
 from i18n import t
 
 PROVIDERS = ("openrouter", "local", "claude", "codex")
@@ -196,9 +197,10 @@ def _output(cmd, timeout, service):
         ))
     try:
         done = subprocess.run(
-            cmd, cwd=os.path.expanduser("~"), stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
+            spawn.resolve(cmd), cwd=os.path.expanduser("~"),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=spawn.flags(),
         )
     except subprocess.TimeoutExpired:
         raise CleanupError(t("{service} did not finish within {seconds} seconds.",

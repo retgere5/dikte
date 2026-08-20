@@ -278,6 +278,104 @@ def _macos_press(shortcut, delay):
         core.CFRelease(up)
 
 
+# --- Windows: the clipboard and SendInput through user32 -------------------
+
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE = 0x0002
+# The clipboard is one lock shared by every program on the machine, and any
+# of them may be holding it for a moment; five short tries outlast all of the
+# well behaved ones.
+CLIPBOARD_TRIES = 5
+CLIPBOARD_RETRY_S = 0.05
+
+
+@functools.lru_cache(maxsize=1)
+def _windows_api():
+    """The bit of user32 and kernel32 the clipboard and the paste go through.
+
+    Loaded on first use rather than at import: this module is read on every
+    system, and WinDLL exists on one of them.
+    """
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    except (OSError, AttributeError) as exc:
+        raise PasteError(t("Could not run {tool}: {error}",
+                           tool="user32", error=exc)) from exc
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    return user32, kernel32
+
+
+def _open_clipboard(user32):
+    for attempt in range(CLIPBOARD_TRIES):
+        if user32.OpenClipboard(None):
+            return True
+        if attempt < CLIPBOARD_TRIES - 1:
+            time.sleep(CLIPBOARD_RETRY_S)
+    return False
+
+
+def _windows_copy(payload):
+    """Put UTF-8 bytes on the clipboard as CF_UNICODETEXT."""
+    user32, kernel32 = _windows_api()
+    data = payload.decode("utf-8", "replace").encode("utf-16-le") + b"\x00\x00"
+    if not _open_clipboard(user32):
+        raise PasteError(t("Could not copy to clipboard: {error}",
+                           error="another program is holding it"))
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        pointer = kernel32.GlobalLock(handle) if handle else None
+        if not pointer:
+            if handle:
+                kernel32.GlobalFree(handle)
+            raise PasteError(t("Could not copy to clipboard: {error}",
+                               error="no memory for it"))
+        ctypes.memmove(pointer, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            # Only on refusal is the handle still ours to free.
+            kernel32.GlobalFree(handle)
+            raise PasteError(t("Could not copy to clipboard: {error}",
+                               error="the clipboard refused it"))
+    finally:
+        user32.CloseClipboard()
+
+
+def _windows_read():
+    """What is on the clipboard as UTF-8 bytes, or None."""
+    try:
+        user32, kernel32 = _windows_api()
+    except PasteError:
+        return None
+    if not _open_clipboard(user32):
+        return None
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return None
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            return None
+        try:
+            text = ctypes.wstring_at(pointer)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+    return text.encode("utf-8")
+
+
 # --- which of them is here -------------------------------------------------
 
 Desktop = collections.namedtuple(
@@ -285,8 +383,12 @@ Desktop = collections.namedtuple(
     # The clipboard program and the two commands it is run with, what to
     # install when it is missing, the paste combinations Settings offers, and
     # the key press: the program that does it, whether it can happen at all,
-    # and the pressing itself.
-    "clipboard packages read_command copy_command shortcuts keyboard ready press",
+    # and the pressing itself. Windows has no clipboard program worth the
+    # name, so there the last two fields are calls into the system instead,
+    # the same shape the key press already takes on macOS.
+    "clipboard packages read_command copy_command shortcuts keyboard ready press "
+    "read_call copy_call",
+    defaults=(None, None),
 )
 
 WAYLAND = Desktop(
@@ -322,6 +424,25 @@ MACOS = Desktop(
 )
 
 
+def _windows_press(shortcut, delay):
+    raise PasteError(t("Could not run {tool}: {error}", tool="SendInput",
+                       error="not wired up yet"))
+
+
+WINDOWS = Desktop(
+    clipboard="",   # no program: the clipboard is a call into the system
+    packages="",
+    read_command=[],
+    copy_command=[],
+    shortcuts=["ctrl+v", "ctrl+shift+v", "shift+insert"],
+    keyboard="",
+    ready=lambda: True,
+    press=_windows_press,
+    read_call=_windows_read,
+    copy_call=_windows_copy,
+)
+
+
 def desktop():
     """The programs this session's clipboard and key press go through.
 
@@ -331,6 +452,8 @@ def desktop():
     """
     if sys.platform == "darwin":
         return MACOS
+    if sys.platform == "win32":
+        return WINDOWS
     if os.environ.get("XDG_SESSION_TYPE") == "x11":
         return X11
     if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
@@ -375,6 +498,8 @@ def _macos_restore(snapshot):
 
 def read_clipboard():
     here = desktop()
+    if here.read_call is not None:
+        return here.read_call()
     if here is MACOS and shutil.which("osascript"):
         snapshot = _macos_snapshot()
         if snapshot is not None:
@@ -402,6 +527,9 @@ def _run_copy(payload):
 
 def copy(text):
     here = desktop()
+    if here.copy_call is not None:
+        here.copy_call(text.encode("utf-8"))
+        return
     if not shutil.which(here.clipboard):
         raise PasteError(
             t("{tool} not found. Install {packages}.",
@@ -421,7 +549,15 @@ def copy_bytes(data):
     if isinstance(data, _MAC_SNAPSHOT):
         _macos_restore(data)
         return
-    if data is None or not shutil.which(desktop().clipboard):
+    here = desktop()
+    if here.copy_call is not None:
+        if data is not None:
+            try:
+                here.copy_call(data)
+            except PasteError:
+                pass
+        return
+    if data is None or not shutil.which(here.clipboard):
         return
     try:
         _run_copy(data)

@@ -13,6 +13,7 @@ is checked on a Mac and the macOS half on Linux, and a change to the chooser
 cannot quietly break the platform nobody is sitting at.
 """
 
+import ctypes
 import os
 import pathlib
 import subprocess
@@ -59,6 +60,12 @@ class Chooser(DikteTest):
     def test_a_mac_running_an_x_server_is_still_a_mac(self):
         """XQuartz sets DISPLAY, and none of X's programs are what pastes here."""
         self.assertIs(self.under("darwin", DISPLAY=":0"), paste.MACOS)
+
+    def test_windows(self):
+        self.assertIs(self.under("win32"), paste.WINDOWS)
+
+    def test_windows_with_a_display_variable_is_still_windows(self):
+        self.assertIs(self.under("win32", DISPLAY=":0"), paste.WINDOWS)
 
 
 class Standing:
@@ -427,6 +434,131 @@ class MacClipboardSnapshot(DikteTest):
                                   return_value=FakeCompleted(stdout=b"not json")):
             self.assertIsNone(paste._macos_snapshot())
         self.assertFalse(os.path.exists(directory))
+
+
+class FakeWin32:
+    """user32+kernel32 with a real clipboard buffer behind them.
+
+    GlobalAlloc hands out real ctypes buffers so that the memmove and
+    wstring_at inside paste.py operate on actual memory; what the fake keeps
+    is the call order, which is the contract Windows holds us to.
+    """
+
+    CF_UNICODETEXT = 13
+
+    def __init__(self, open_answers=(1,), clipboard_text=None):
+        self.calls = []
+        self.buffers = {}
+        self.stored = None            # handle put in by SetClipboardData
+        self.open_answers = list(open_answers)
+        self.get_handle = 0
+        if clipboard_text is not None:
+            data = clipboard_text.encode("utf-16-le") + b"\x00\x00"
+            buf = ctypes.create_string_buffer(data, len(data))
+            self.buffers[999] = buf
+            self.get_handle = 999
+
+    # user32 half
+    def OpenClipboard(self, owner):
+        self.calls.append("open")
+        return self.open_answers.pop(0) if self.open_answers else 1
+
+    def CloseClipboard(self):
+        self.calls.append("close")
+        return 1
+
+    def EmptyClipboard(self):
+        self.calls.append("empty")
+        return 1
+
+    def SetClipboardData(self, fmt, handle):
+        self.calls.append(("set", fmt))
+        self.stored = handle
+        return handle
+
+    def GetClipboardData(self, fmt):
+        self.calls.append(("get", fmt))
+        return self.get_handle
+
+    # kernel32 half
+    def GlobalAlloc(self, flags, size):
+        handle = len(self.buffers) + 1
+        self.buffers[handle] = ctypes.create_string_buffer(size)
+        return handle
+
+    def GlobalLock(self, handle):
+        return ctypes.addressof(self.buffers[handle])
+
+    def GlobalUnlock(self, handle):
+        return 1
+
+    def GlobalFree(self, handle):
+        self.buffers.pop(handle, None)
+        return None
+
+    def stored_text(self):
+        # The buffer is exactly as long as the payload _windows_copy sized it
+        # for, so decoding the whole thing and dropping the CF_UNICODETEXT
+        # terminator is the only split that survives a string ending in a
+        # character whose UTF-16 low byte is itself zero.
+        raw = bytes(self.buffers[self.stored].raw)
+        return raw.decode("utf-16-le").rstrip("\x00")
+
+
+class WindowsClipboard(DikteTest):
+    """The promises every system owes, kept through calls instead of programs."""
+
+    platform = "win32"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", self.platform))
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+
+    def fake(self, **kwargs):
+        api = FakeWin32(**kwargs)
+        self.patch_attr(paste, "_windows_api", lambda: (api, api))
+        return api
+
+    def test_the_text_goes_in_as_utf16_with_turkish_intact(self):
+        api = self.fake()
+        paste.copy("şöğüİı çÇ")
+        self.assertEqual(api.stored_text(), "şöğüİı çÇ")
+        self.assertEqual(api.calls[:2], ["open", "empty"])
+        self.assertIn(("set", FakeWin32.CF_UNICODETEXT), api.calls)
+        self.assertEqual(api.calls[-1], "close")
+
+    def test_what_is_on_the_clipboard_comes_back_as_bytes(self):
+        self.fake(clipboard_text="hello")
+        self.assertEqual(paste.read_clipboard(), b"hello")
+
+    def test_an_empty_clipboard_is_not_an_error(self):
+        self.fake()                      # no text: GetClipboardData answers 0
+        self.assertIsNone(paste.read_clipboard())
+
+    def test_a_clipboard_someone_else_holds_is_retried_then_reported(self):
+        api = self.fake(open_answers=[0, 0, 0, 0, 0])
+        with mock.patch.object(paste.time, "sleep"), \
+                self.assertRaises(paste.PasteError):
+            paste.copy("hello")
+        self.assertEqual(api.calls.count("open"), 5)
+
+    def test_a_held_clipboard_reads_as_empty_rather_than_crashing(self):
+        self.fake(open_answers=[0, 0, 0, 0, 0])
+        with mock.patch.object(paste.time, "sleep"):
+            self.assertIsNone(paste.read_clipboard())
+
+    def test_copy_bytes_restores_a_snapshot(self):
+        api = self.fake()
+        paste.copy_bytes("önce".encode("utf-8"))
+        self.assertEqual(api.stored_text(), "önce")
+
+    def test_a_missing_api_names_the_failure(self):
+        self.patch_attr(paste, "_windows_api",
+                        mock.Mock(side_effect=paste.PasteError("no user32")))
+        with self.assertRaises(paste.PasteError):
+            paste.copy("hello")
+        self.assertIsNone(paste.read_clipboard())
 
 
 if __name__ == "__main__":

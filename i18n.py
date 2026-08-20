@@ -106,6 +106,8 @@ TR = {
         "Ses kayıt aracı bulunamadı. pulseaudio-utils ya da pipewire-audio kur.",
     "ffmpeg not found. Install it with: brew install ffmpeg":
         "ffmpeg bulunamadı. Şununla kur: brew install ffmpeg",
+    "ffmpeg not found. Install it with: winget install Gyan.FFmpeg":
+        "ffmpeg bulunamadı. Şununla kurun: winget install Gyan.FFmpeg",
     "Audio recorder stopped before receiving sound: {error}":
         "Ses kayıt aracı veri alamadan kapandı: {error}",
     "Could not copy to clipboard: {error}": "Panoya kopyalanamadı: {error}",

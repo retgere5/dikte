@@ -28,6 +28,7 @@ import wave
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+import spawn
 from i18n import t
 
 RATE = 16000
@@ -603,6 +604,88 @@ def _avfoundation_default_output():
     return ""
 
 
+# Windows offers no monitor of the speakers through dshow either: recording
+# the far side of a meeting needs a device that plays it back as an input.
+# "Stereo Mix" is the driver's own, VB-Cable and virtual-audio-capturer are
+# the two people install.
+WINDOWS_LOOPBACK = ("stereo mix", "stereo karisimi", "stereo karışımı",
+                    "cable output", "virtual-audio")
+
+
+def _dshow_devices():
+    """[(moniker, name)] for every dshow audio capture device.
+
+    ffmpeg prints the list on stderr and then fails, the same dance as the
+    avfoundation listing. The moniker survives renames and duplicate names,
+    so it is what the recorder is given; the name is what is shown.
+    """
+    if not shutil.which("ffmpeg"):
+        return []
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-list_devices", "true",
+             "-f", "dshow", "-i", "dummy"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=8, check=False, creationflags=spawn.flags(),
+        )
+    except (subprocess.SubprocessError, OSError):
+        return []
+
+    devices, pending = [], ""
+    for line in result.stderr.splitlines():
+        found = re.search(r'"([^"]+)"\s+\(audio\)', line)
+        if found:
+            pending = found.group(1)
+            continue
+        if pending and "Alternative name" in line:
+            moniker = re.search(r'"([^"]+)"', line)
+            if moniker:
+                devices.append((moniker.group(1), pending))
+            pending = ""
+    return devices
+
+
+def _dshow_record(target):
+    if not shutil.which("ffmpeg"):
+        return []
+    if not target:
+        # dshow has no "default" pseudo-device; the first listed one is the
+        # closest thing there is, and Settings offers the real choice.
+        devices = _dshow_devices()
+        if not devices:
+            return []
+        target = devices[0][0]
+    # No -nostdin: the recording is ended by writing "q" to it, because
+    # Windows has no SIGINT to send a child (see _stop_gently).
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={target}",
+        "-ac", str(CHANNELS), "-ar", str(RATE), "-f", "s16le", "-",
+    ]
+
+
+def _dshow_meeting(mic_target, system_target):
+    if not mic_target:
+        devices = _dshow_devices()
+        mic_target = devices[0][0] if devices else ""
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-thread_queue_size", "4096",
+        "-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={mic_target}",
+        "-thread_queue_size", "4096",
+        "-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={system_target}",
+        "-filter_complex", MERGE_FILTER, "-map", "[out]",
+        "-f", "s16le", "-ar", str(RATE), "-",
+    ]
+
+
+def _dshow_default_output():
+    for moniker, name in _dshow_devices():
+        if any(word in name.lower() for word in WINDOWS_LOOPBACK):
+            return moniker
+    return ""
+
+
 Sound = collections.namedtuple(
     "Sound",
     # How to capture one source and two at once, the two device lists, which
@@ -632,10 +715,25 @@ COREAUDIO = Sound(
     missing="ffmpeg not found. Install it with: brew install ffmpeg",
 )
 
+WINDOWS = Sound(
+    record=_dshow_record,
+    meeting=_dshow_meeting,
+    inputs=_dshow_devices,
+    # The same compromise as macOS: a loopback device is a capture device
+    # like any other, so every one of them is offered as the far side.
+    outputs=_dshow_devices,
+    default_output=_dshow_default_output,
+    missing="ffmpeg not found. Install it with: winget install Gyan.FFmpeg",
+)
+
 
 def sound():
     """The programs this machine records through."""
-    return COREAUDIO if sys.platform == "darwin" else PULSE
+    if sys.platform == "darwin":
+        return COREAUDIO
+    if sys.platform == "win32":
+        return WINDOWS
+    return PULSE
 
 
 def list_sources():

@@ -561,5 +561,54 @@ class WindowsClipboard(DikteTest):
         self.assertIsNone(paste.read_clipboard())
 
 
+class WindowsPress(DikteTest):
+    platform = "win32"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", self.platform))
+        self.sent = []
+
+        fake = mock.Mock()
+
+        def send_input(count, array, size):
+            for i in range(count):
+                self.sent.append((array[i].ki.wVk,
+                                  bool(array[i].ki.dwFlags & 0x0002)))
+            return count
+
+        fake.SendInput = send_input
+        self.patch_attr(paste, "_windows_api", lambda: (fake, fake))
+
+    def test_ctrl_v_is_pressed_down_and_released_in_reverse(self):
+        with mock.patch.object(paste.time, "sleep"):
+            paste._windows_press("ctrl+v", 0)
+        self.assertEqual(self.sent, [(0x11, False), (0x56, False),
+                                     (0x56, True), (0x11, True)])
+
+    def test_shift_insert_uses_the_insert_key(self):
+        with mock.patch.object(paste.time, "sleep"):
+            paste._windows_press("shift+insert", 0)
+        self.assertEqual(self.sent, [(0x10, False), (0x2D, False),
+                                     (0x2D, True), (0x10, True)])
+
+    def test_an_unknown_key_is_refused_before_anything_is_typed(self):
+        with self.assertRaises(paste.PasteError):
+            paste._windows_press("ctrl+ş", 0)
+        self.assertEqual(self.sent, [])
+
+    def test_a_refused_send_is_reported(self):
+        api = paste._windows_api()[0]
+        api.SendInput = lambda count, array, size: 0
+        with mock.patch.object(paste.time, "sleep"), \
+                self.assertRaises(paste.PasteError):
+            paste._windows_press("ctrl+v", 0)
+
+    def test_the_delay_lets_focus_come_back_first(self):
+        with mock.patch.object(paste.time, "sleep") as sleep:
+            paste._windows_press("ctrl+v", 0.12)
+        sleep.assert_called_once_with(0.12)
+
+
 if __name__ == "__main__":
     unittest.main()

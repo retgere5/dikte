@@ -313,6 +313,8 @@ def _windows_api():
     kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    user32.SendInput.restype = ctypes.c_uint
+    user32.SendInput.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]
     return user32, kernel32
 
 
@@ -424,9 +426,79 @@ MACOS = Desktop(
 )
 
 
+# Virtual-key codes: what the key means, not where it sits (contrast the
+# scancodes hotkey.py's evdev table holds). Only what a paste combination can
+# name is here; the settings offer three and a hand-typed one stays possible.
+WIN_VK = {
+    "ctrl": 0x11, "control": 0x11, "shift": 0x10, "alt": 0x12,
+    "win": 0x5B, "super": 0x5B, "meta": 0x5B,
+    "v": 0x56, "c": 0x43, "x": 0x58,
+    "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
+    "tab": 0x09, "enter": 0x0D, "return": 0x0D, "space": 0x20,
+}
+WIN_MODIFIERS = ("ctrl", "control", "shift", "alt", "win", "super", "meta")
+KEYEVENTF_KEYUP = 0x0002
+INPUT_KEYBOARD = 1
+
+
+class _KeybdInput(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_uint32), ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _InputUnion(ctypes.Union):
+    # MOUSEINPUT is the largest arm of the union; SendInput measures the
+    # struct, so the padding has to stand in for the arms not declared.
+    _fields_ = [("ki", _KeybdInput), ("padding", ctypes.c_ubyte * 32)]
+
+
+class _Input(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", ctypes.c_uint32), ("u", _InputUnion)]
+
+
+def _windows_keys(shortcut):
+    """'ctrl+v' -> [0x11, 0x56]: modifiers first, the key last."""
+    parts = [part.strip().lower() for part in str(shortcut).split("+")
+             if part.strip()]
+    if not parts:
+        raise PasteError(t("Unknown key: {key}", key=shortcut))
+    keys = []
+    for part in parts[:-1]:
+        if part not in WIN_MODIFIERS:
+            raise PasteError(t("Unknown key: {key}", key=part))
+        keys.append(WIN_VK[part])
+    last = parts[-1]
+    if last not in WIN_VK or last in WIN_MODIFIERS:
+        raise PasteError(t("Unknown key: {key}", key=last))
+    keys.append(WIN_VK[last])
+    return keys
+
+
+def _key_event(vk, up):
+    event = _Input()
+    event.type = INPUT_KEYBOARD
+    event.ki = _KeybdInput(vk, 0, KEYEVENTF_KEYUP if up else 0, 0, 0)
+    return event
+
+
 def _windows_press(shortcut, delay):
-    raise PasteError(t("Could not run {tool}: {error}", tool="SendInput",
-                       error="not wired up yet"))
+    """Send the key down and up straight into the window system.
+
+    UIPI stops input reaching a window running elevated; the text is still on
+    the clipboard then, and the error the caller shows says what to press.
+    """
+    keys = _windows_keys(shortcut)
+    user32, _ = _windows_api()
+    time.sleep(delay)  # let the selection settle and focus come back
+    events = ([_key_event(vk, False) for vk in keys]
+              + [_key_event(vk, True) for vk in reversed(keys)])
+    array = (_Input * len(events))(*events)
+    sent = user32.SendInput(len(events), array, ctypes.sizeof(_Input))
+    if sent != len(events):
+        raise PasteError(t("Could not run {tool}: {error}", tool="SendInput",
+                           error=f"sent {sent} of {len(events)} events"))
 
 
 WINDOWS = Desktop(

@@ -340,6 +340,11 @@ class MacSettings(Settings):
                    for index in range(window.paste_shortcut.count())]
         self.assertEqual(offered, paste.MACOS.shortcuts)
 
+    def test_the_paste_keys_on_offer_are_the_ones_windows_uses(self):
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(paste.desktop().shortcuts,
+                             ["ctrl+v", "ctrl+shift+v", "shift+insert"])
+
 
 class Overlay(DikteTest):
     def overlay(self, **kwargs):

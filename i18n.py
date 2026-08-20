@@ -357,6 +357,12 @@ TR = {
     "macOS would not give Dikte {shortcut}; another application already holds it.":
         "macOS {shortcut} kombinasyonunu Dikte'ye vermedi; başka bir uygulama "
         "onu şimdiden tutuyor.",
+    "Could not reach the Windows shortcut service: {error}":
+        "Windows kısayol hizmetine ulaşılamadı: {error}",
+    "Windows would not give Dikte {shortcut}; another application already "
+    "holds it.":
+        "Windows {shortcut} kısayolunu Dikte'ye vermedi; başka bir uygulama "
+        "onu tutuyor.",
     "Cannot read /dev/input. Your user needs to be in the 'input' group:\n"
     "  sudo usermod -aG input $USER   (then log out and back in)":
         "/dev/input okunamıyor. Kullanıcının 'input' grubunda olması gerekir:\n"

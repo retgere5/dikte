@@ -3,8 +3,11 @@
 import contextlib
 import os
 import subprocess
+import sys
 import unittest
 from unittest import mock
+
+from PyQt6.QtCore import Qt
 
 import config as cfg
 import hotkey
@@ -554,6 +557,118 @@ class WindowsChooser(DikteTest):
     def test_a_windows_combination_validates(self):
         self.assertTrue(hotkey.valid_shortcut("Ctrl+Space"))
         self.assertFalse(hotkey.valid_shortcut("Ctrl+ş"))
+
+
+class FakeUser32:
+    """RegisterHotKey and a message queue, scripted from the test.
+
+    GetMessageW is handed the messages the test queued and then answers 0,
+    which is how the loop is told to end; what the fake keeps is which ids
+    were registered and unregistered, with which modifiers.
+    """
+
+    def __init__(self, refuse=(), messages=()):
+        self.refuse = set(refuse)          # vk codes to refuse
+        self.messages = list(messages)     # wParam values to deliver
+        self.registered = []               # (id, modifiers, vk)
+        self.unregistered = []
+
+    def RegisterHotKey(self, hwnd, identifier, modifiers, vk):
+        if vk in self.refuse:
+            return 0
+        self.registered.append((identifier, modifiers, vk))
+        return 1
+
+    def UnregisterHotKey(self, hwnd, identifier):
+        self.unregistered.append(identifier)
+        return 1
+
+    def GetMessageW(self, message, hwnd, low, high):
+        if not self.messages:
+            return 0
+        wparam = self.messages.pop(0)
+        target = message._obj if hasattr(message, "_obj") else message
+        target.message = hotkey.WM_HOTKEY
+        target.wParam = wparam
+        return 1
+
+    def PostThreadMessageW(self, thread_id, message, wparam, lparam):
+        return 1
+
+
+class WindowsListener(DikteTest):
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", "win32"))
+        self.addCleanup(hotkey._REGISTERED.clear)
+
+    def wire(self, fake):
+        kernel32 = mock.Mock()
+        kernel32.GetCurrentThreadId.return_value = 4242
+        self.patch_attr(hotkey, "_user32", lambda: (fake, kernel32))
+        return hotkey.WindowsHotkey()
+
+    def test_a_binding_is_registered_without_repeat(self):
+        listener = self.wire(FakeUser32())
+        heard = []
+        listener.triggered.connect(heard.append, Qt.ConnectionType.DirectConnection)
+        self.assertTrue(listener.start({"toggle": "Ctrl+Space"}))
+        listener._thread.join(timeout=2)
+        fake = hotkey._user32()[0]
+        self.assertEqual(fake.registered,
+                         [(1, 0x0002 | hotkey.MOD_NOREPEAT, 0x20)])
+
+    def test_the_pressed_id_comes_back_as_its_name(self):
+        fake = FakeUser32(messages=[1])
+        listener = self.wire(fake)
+        heard = []
+        listener.triggered.connect(heard.append, Qt.ConnectionType.DirectConnection)
+        self.assertTrue(listener.start({"toggle": "Ctrl+Space"}))
+        listener._thread.join(timeout=2)
+        # The signal crossed threads; a queued delivery needs the event loop,
+        # so it is read back directly from the emit spy instead.
+        self.assertEqual(heard, ["toggle"])
+
+    def test_a_refused_combination_is_reported_and_skipped(self):
+        fake = FakeUser32(refuse={0x20})
+        listener = self.wire(fake)
+        complaints = []
+        listener.failed.connect(complaints.append, Qt.ConnectionType.DirectConnection)
+        self.assertFalse(listener.start({"toggle": "Ctrl+Space"}))
+        self.assertTrue(complaints and "Ctrl+Space" in complaints[0])
+
+    def test_an_unparsable_combination_is_reported_and_skipped(self):
+        listener = self.wire(FakeUser32())
+        complaints = []
+        listener.failed.connect(complaints.append, Qt.ConnectionType.DirectConnection)
+        self.assertFalse(listener.start({"toggle": "Ctrl+ş"}))
+        self.assertTrue(complaints)
+
+    def test_stopping_unregisters_what_was_held(self):
+        fake = FakeUser32()
+        listener = self.wire(fake)
+        listener.start({"toggle": "Ctrl+Space"})
+        listener._thread.join(timeout=2)   # queue is empty: loop already over
+        listener.stop()
+        self.assertEqual(fake.unregistered, [1])
+
+    def test_the_status_line_reads_what_was_actually_given(self):
+        listener = self.wire(FakeUser32())
+        listener.start({"toggle": "Ctrl+Space"})
+        listener._thread.join(timeout=2)
+        self.assertEqual(hotkey.shortcut_status(hotkey.DESKTOP_ID), "Ctrl+Space")
+
+
+class ListenerChooser(DikteTest):
+
+    def test_windows_listens_through_registerhotkey(self):
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertIsInstance(hotkey.listener(), hotkey.WindowsHotkey)
+
+    def test_linux_still_reads_dev_input(self):
+        with mock.patch.object(sys, "platform", "linux"):
+            self.assertIsInstance(hotkey.listener(), hotkey.EvdevHotkey)
 
 
 class FakeCarbon:

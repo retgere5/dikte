@@ -470,6 +470,142 @@ def parse_windows_shortcut(text):
     return modifiers, key
 
 
+class _Msg(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint32),
+                ("wParam", ctypes.c_size_t), ("lParam", ctypes.c_ssize_t),
+                ("time", ctypes.c_uint32),
+                ("pt_x", ctypes.c_long), ("pt_y", ctypes.c_long)]
+
+
+def _user32():
+    """user32 and kernel32, typed the way the listener above uses them."""
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32")
+    except AttributeError as exc:      # no WinDLL off Windows
+        raise OSError(str(exc)) from exc
+    user32.RegisterHotKey.restype = ctypes.c_int
+    user32.RegisterHotKey.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+    ]
+    user32.UnregisterHotKey.restype = ctypes.c_int
+    user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.GetMessageW.restype = ctypes.c_int
+    user32.GetMessageW.argtypes = [
+        ctypes.POINTER(_Msg), ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
+    ]
+    user32.PostThreadMessageW.restype = ctypes.c_int
+    user32.PostThreadMessageW.argtypes = [
+        ctypes.c_uint32, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+    ]
+    kernel32.GetCurrentThreadId.restype = ctypes.c_uint32
+    return user32, kernel32
+
+
+class WindowsHotkey(QObject):
+    """Catches global shortcuts through RegisterHotKey.
+
+    Like the Carbon listener this one does swallow the key: while Dikte holds
+    a combination, the focused application does not see it. A hotkey with no
+    window belongs to the thread that registered it, and only that thread's
+    message queue hears WM_HOTKEY, so registration, the queue and the
+    unregistration all live on one worker thread.
+    """
+
+    triggered = pyqtSignal(str)   # the name the binding was registered under
+    failed = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._thread = None
+        self._thread_id = None
+        self._count = 0
+        self._ready = threading.Event()
+
+    @property
+    def running(self):
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, bindings):
+        """`bindings` is {name: 'Ctrl+Space'}; an empty combination is skipped."""
+        self.stop()
+        parsed = []
+        for identifier, (name, shortcut) in enumerate(bindings.items(), 1):
+            if not shortcut:
+                continue
+            modifiers, key = parse_windows_shortcut(shortcut)
+            if key is None:
+                self.failed.emit(
+                    t("Could not parse the shortcut: {shortcut}",
+                      shortcut=shortcut)
+                )
+                continue
+            parsed.append((identifier, name, shortcut, modifiers, key))
+        if not parsed:
+            return False
+        try:
+            user32, kernel32 = _user32()
+        except OSError as exc:
+            self.failed.emit(t("Could not reach the Windows shortcut service: "
+                               "{error}", error=exc))
+            return False
+        self._count = 0
+        self._ready.clear()
+        self._thread = threading.Thread(
+            target=self._loop, args=(user32, kernel32, parsed), daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait(timeout=2)
+        return self._count > 0
+
+    def stop(self):
+        thread, thread_id = self._thread, self._thread_id
+        if thread is not None and thread.is_alive() and thread_id is not None:
+            try:
+                user32, _ = _user32()
+                user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0)
+            except OSError:
+                pass
+        if thread is not None:
+            thread.join(timeout=1.5)
+        self._thread = None
+        self._thread_id = None
+        self._count = 0
+        _REGISTERED.clear()
+
+    def _loop(self, user32, kernel32, parsed):
+        self._thread_id = kernel32.GetCurrentThreadId()
+        names, held = {}, []
+        for identifier, name, shortcut, modifiers, key in parsed:
+            if user32.RegisterHotKey(None, identifier,
+                                     modifiers | MOD_NOREPEAT, key):
+                names[identifier] = name
+                held.append(identifier)
+                spec = SHORTCUTS.get(name)
+                if spec:
+                    _REGISTERED[spec.desktop_id] = shortcut
+            else:
+                # This is the conflict warning on Windows: there is no list
+                # to read beforehand, the answer comes from asking for the key.
+                self.failed.emit(t(
+                    "Windows would not give Dikte {shortcut}; another "
+                    "application already holds it.", shortcut=shortcut))
+        self._count = len(held)
+        self._ready.set()
+        if not held:
+            return
+        message = _Msg()
+        try:
+            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+                if message.message == WM_HOTKEY:
+                    name = names.get(message.wParam)
+                    if name:
+                        self.triggered.emit(name)
+        finally:
+            for identifier in held:
+                user32.UnregisterHotKey(None, identifier)
+
+
 # --- the desktop's own shortcut -------------------------------------------
 
 def _macos():
@@ -604,7 +740,11 @@ def gnome_shortcut_status(desktop_id=DESKTOP_ID):
 
 def listener(parent=None):
     """The thing that hears the key, for whichever system this is."""
-    return CarbonHotkey(parent) if _macos() else EvdevHotkey(parent)
+    if _macos():
+        return CarbonHotkey(parent)
+    if _windows():
+        return WindowsHotkey(parent)
+    return EvdevHotkey(parent)
 
 
 def valid_shortcut(text):

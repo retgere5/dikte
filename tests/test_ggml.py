@@ -327,6 +327,97 @@ class InstallProgram(Local):
         self.assertEqual(ggml._wanted_assets(ggml.LLAMA), ("bin-ubuntu-x64.tar.gz",))
 
 
+class WindowsAssets(DikteTest):
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", "win32"))
+
+    def test_llama_prefers_vulkan_when_the_loader_is_there(self):
+        with mock.patch.object(ggml, "_has_vulkan", return_value=True), \
+                mock.patch.object(ggml.platform, "machine",
+                                  return_value="AMD64"):
+            self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
+                             ("bin-win-vulkan-x64.zip", "bin-win-cpu-x64.zip"))
+
+    def test_llama_without_vulkan_stays_on_the_cpu(self):
+        with mock.patch.object(ggml, "_has_vulkan", return_value=False), \
+                mock.patch.object(ggml.platform, "machine",
+                                  return_value="AMD64"):
+            self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
+                             ("bin-win-cpu-x64.zip",))
+
+    def test_whisper_takes_the_plain_x64_zip_by_its_full_name(self):
+        # "whisper-blas-bin-x64.zip" also ends with "bin-x64.zip"; the full
+        # name is the only ending that cannot match the wrong archive.
+        with mock.patch.object(ggml.platform, "machine",
+                               return_value="AMD64"):
+            self.assertEqual(ggml._wanted_assets(ggml.WHISPER),
+                             ("whisper-bin-x64.zip",))
+
+    def test_an_arm64_windows_machine_is_told_the_truth(self):
+        with mock.patch.object(ggml.platform, "machine",
+                               return_value="ARM64"), \
+                mock.patch.object(ggml, "_has_vulkan", return_value=False):
+            self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
+                             ("bin-win-cpu-arm64.zip",))
+            self.assertEqual(ggml._wanted_assets(ggml.WHISPER), ())
+
+
+class ZipExtract(DikteTest):
+
+    def make_zip(self, *names):
+        import zipfile
+        path = self.path("release.zip")
+        with zipfile.ZipFile(path, "w") as bundle:
+            for name in names:
+                bundle.writestr(name, b"payload")
+        return path
+
+    def test_a_zip_release_unpacks(self):
+        archive = self.make_zip("build/bin/whisper-server.exe",
+                                "build/bin/ggml.dll")
+        into = self.path("into")
+        ggml._extract(str(archive), str(into))
+        self.assertTrue((into / "build/bin/whisper-server.exe").is_file())
+
+    def test_a_zip_that_reaches_outside_is_refused(self):
+        archive = self.make_zip("../escape.txt")
+        with self.assertRaises(ggml.LocalError):
+            ggml._extract(str(archive), str(self.path("into")))
+        self.assertFalse(self.path("escape.txt").exists())
+
+
+class WindowsBinaryName(DikteTest):
+
+    def test_the_binary_carries_exe_on_windows(self):
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(ggml._binary_name(ggml.WHISPER),
+                             "whisper-server.exe")
+
+    def test_and_stays_bare_elsewhere(self):
+        with mock.patch.object(sys, "platform", "linux"):
+            self.assertEqual(ggml._binary_name(ggml.WHISPER), "whisper-server")
+
+
+class WindowsSweep(DikteTest):
+
+    def test_ours_is_recognised_from_the_cim_command_line(self):
+        blob = f"llama-server.exe -m {ggml.DATA_DIR}\\models\\x.gguf"
+        server = ggml.Server(ggml.LLAMA, lambda s: [], {})
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(ggml, "_windows_cmdline",
+                                  return_value=blob):
+            self.assertTrue(server._is_ours(4242))
+
+    def test_somebody_elses_process_is_left_alone(self):
+        server = ggml.Server(ggml.LLAMA, lambda s: [], {})
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(ggml, "_windows_cmdline",
+                                  return_value="notepad.exe"):
+            self.assertFalse(server._is_ours(4242))
+
+
 class WhichCopyRuns(Local):
     def test_a_system_build_wins_over_a_downloaded_one(self):
         self.patch_attr(ggml, "installed_program", lambda program: "/data/whisper-server")

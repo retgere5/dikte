@@ -43,8 +43,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
 import hub
+import spawn
 from i18n import t
 
 HOST = "127.0.0.1"
@@ -229,10 +231,13 @@ def _has_vulkan():
     """Whether a Vulkan loader is installed, which decides which build to fetch.
 
     llama.cpp publishes no CUDA build for Linux, so Vulkan is what a graphics
-    card gets here. The build without it is smaller and runs on the CPU, and
-    fetching the Vulkan one for a machine that cannot load it would only make
-    the download bigger.
+    card gets here. On Windows the CUDA archives need a separate cudart
+    companion download, so Vulkan is the one-archive way to the GPU there too,
+    on NVIDIA and AMD and Intel alike. The build without it is smaller and
+    runs on the CPU.
     """
+    if sys.platform == "win32":
+        return bool(ctypes.util.find_library("vulkan-1"))
     return bool(ctypes.util.find_library("vulkan"))
 
 
@@ -241,11 +246,18 @@ def _wanted_assets(program):
 
     llama.cpp publishes native Metal-enabled macOS archives. whisper.cpp does
     not publish a runnable macOS server archive, so an arm64 Mac must not
-    mistake Ubuntu's arm64 archive for a native build.
+    mistake Ubuntu's arm64 archive for a native build. On Windows whisper's
+    plain zip is named by its full name: the blas variant ends the same way.
     """
     arch = _arch()
     if sys.platform == "darwin":
         return () if program is WHISPER else (f"bin-macos-{arch}.tar.gz",)
+    if sys.platform == "win32":
+        if program is WHISPER:
+            return ("whisper-bin-x64.zip",) if arch == "x64" else ()
+        if _has_vulkan() and arch == "x64":
+            return (f"bin-win-vulkan-{arch}.zip", f"bin-win-cpu-{arch}.zip")
+        return (f"bin-win-cpu-{arch}.zip",)
     if program is LLAMA and _has_vulkan():
         return (f"bin-ubuntu-vulkan-{arch}.tar.gz", f"bin-ubuntu-{arch}.tar.gz")
     return (f"bin-ubuntu-{arch}.tar.gz",)
@@ -298,13 +310,35 @@ def _find_binary(root, name):
     return None
 
 
-def _extract(archive, into):
-    """Unpack a release tarball, refusing anything that reaches outside `into`.
+def _binary_name(program):
+    """What the server binary is called on this system."""
+    return program.binary + (".exe" if sys.platform == "win32" else "")
 
-    The archives lay their libraries next to their binaries and are linked with
-    an $ORIGIN runpath, so a whole directory is what has to survive the trip and
-    the binary cannot be lifted out of it.
+
+def _extract(archive, into):
+    """Unpack a release archive, refusing anything that reaches outside `into`.
+
+    The archives lay their libraries next to their binaries and are linked
+    with an $ORIGIN runpath (a plain directory on Windows), so a whole
+    directory is what has to survive the trip and the binary cannot be lifted
+    out of it.
     """
+    name = os.path.basename(str(archive))
+    if str(archive).endswith(".zip"):
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                root = pathlib.Path(into).resolve()
+                for info in bundle.infolist():
+                    target = (root / info.filename).resolve()
+                    if not target.is_relative_to(root):
+                        raise LocalError(t("Could not unpack {name}: {error}",
+                                           name=name,
+                                           error="a path reaches outside"))
+                bundle.extractall(into)
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise LocalError(t("Could not unpack {name}: {error}",
+                               name=name, error=exc)) from exc
+        return
     try:
         with tarfile.open(archive, "r:gz") as tar:
             try:
@@ -313,7 +347,7 @@ def _extract(archive, into):
                 tar.extractall(into)
     except (tarfile.TarError, OSError) as exc:
         raise LocalError(t("Could not unpack {name}: {error}",
-                           name=os.path.basename(str(archive)), error=exc)) from exc
+                           name=name, error=exc)) from exc
 
 
 def install_program(program, tag="", on_progress=None, should_stop=None,
@@ -340,6 +374,11 @@ def install_program(program, tag="", on_progress=None, should_stop=None,
                 "whisper.cpp publishes no macOS build. Install it with: "
                 "brew install whisper-cpp"
             ))
+        if sys.platform == "win32" and program is WHISPER:
+            raise LocalError(t(
+                "whisper.cpp publishes no Windows build for this machine. "
+                "Point Settings at a whisper-server.exe of your own."
+            ))
         raise LocalError(t("{repo} {tag} has no build for this machine.",
                            repo=program.repo, tag=tag))
 
@@ -350,7 +389,7 @@ def install_program(program, tag="", on_progress=None, should_stop=None,
         if not download(item, archive, on_progress, should_stop):
             return ""
         _extract(archive, into)
-        binary = _find_binary(into, program.binary)
+        binary = _find_binary(into, _binary_name(program))
         if binary is None:
             raise LocalError(t("{name} was not in the download.",
                                name=program.binary))
@@ -507,6 +546,25 @@ def _tail(path, lines=3):
     return " | ".join(found[-lines:])
 
 
+def _windows_cmdline(pid):
+    """One process's command line, asked of WMI.
+
+    Only the sweep asks, once at startup; a second of PowerShell there is
+    cheaper than killing a stranger's process ever could be.
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_Process -Filter 'ProcessId="
+             + str(int(pid)) + "').CommandLine"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=spawn.flags(),
+        )
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return ""
+    return (result.stdout or "").strip() if result.returncode == 0 else ""
+
+
 class Server:
     """One process, started when something needs it and stopped when nothing does.
 
@@ -608,6 +666,7 @@ class Server:
                         args + ["--host", HOST, "--port", str(port)],
                         stdout=sink, stderr=subprocess.STDOUT,
                         stdin=subprocess.DEVNULL,
+                        creationflags=spawn.flags(),
                     )
             except OSError as exc:
                 raise LocalError(t("Could not start {name}: {error}",
@@ -707,6 +766,9 @@ class Server:
         could be somebody else's copy; the name together with Dikte's own data
         directory on the command line could not.
         """
+        if sys.platform == "win32":
+            blob = _windows_cmdline(pid)
+            return (self.program.binary in blob and str(DATA_DIR) in blob)
         try:
             blob = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes()
         except OSError:

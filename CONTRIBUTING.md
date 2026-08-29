@@ -53,19 +53,22 @@ forgets fails rather than hangs.
 
 ## Another platform
 
-Three systems are supported: Wayland, X11 and macOS. Each one is a named entry
-in a table, and one chooser picks between them, so a fourth adds an entry and a
-line rather than a branch inside every function. The three tables are
-`paste.Desktop` (clipboard and key press), `audio.Sound` (capture and the device
-lists) and the `_macos()`/`_gnome()` pair in `hotkey.py`. Keep `sys.platform`
-inside the chooser and read it there every time: a constant settled at import is
-one no test can stand somewhere else.
+Four systems are supported: Wayland, X11, macOS and Windows. Each one is a
+named entry in a table, and one chooser picks between them, so a fifth adds an
+entry and a line rather than a branch inside every function. The three tables
+are `paste.Desktop` (clipboard and key press; a system with no clipboard
+program to shell out to fills `read_call`/`copy_call` instead of
+`read_command`/`copy_command`), `audio.Sound` (capture and the device lists)
+and the `_macos()`/`_gnome()`/`_windows()` trio in `hotkey.py`. Keep
+`sys.platform` inside the chooser and read it there every time: a constant
+settled at import is one no test can stand somewhere else.
 
 The tests are split along the same line, and almost none of them are skipped.
-892 of the 935 run on any machine, including every line of the Wayland, X11 and
-macOS backends: the programs are faked at `shutil.which`, the frameworks at the
-one function that loads them. A test class says which system it is standing on
-rather than avoiding the question:
+1070 of the 1115 run on any machine, including every line of the Wayland, X11,
+macOS and Windows backends: the programs are faked at `shutil.which`, the
+frameworks at the one function that loads them, and Windows's user32 calls at
+the ctypes seam `paste.py` and `hotkey.py` each load them through. A test class
+says which system it is standing on rather than avoiding the question:
 
 ```python
 class MacOS(ClipboardContract, DikteTest):

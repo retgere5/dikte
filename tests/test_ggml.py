@@ -120,6 +120,21 @@ class Download(Local):
                 ggml.download(item("m.bin", data), target)
         self.assertFalse(target.exists())
 
+    def test_a_body_longer_than_its_header_installs_nothing(self):
+        # A server that keeps sending past its own announced Content-Length
+        # is the one way the loop could run until the disk is full, so it is
+        # cut short as soon as more has arrived than was promised. The .part
+        # file must be gone too: unlinking it while it is still open for
+        # writing is what used to raise PermissionError on Windows.
+        data = b"more than it said" * 100
+        target = self.path("data", "models", "m.bin")
+        with fake_urlopen(body(data, length=10)):
+            with self.assertRaises(ggml.LocalError) as caught:
+                ggml.download(item("m.bin", data), target)
+        self.assertIn("longer than it said it would be", str(caught.exception))
+        self.assertFalse(target.exists())
+        self.assertFalse(target.with_name("m.bin.part").exists())
+
     def test_a_file_with_no_published_checksum_is_refused(self):
         # Everything fetched here is run or parsed by something written in C++,
         # and GitHub did not always publish a digest.

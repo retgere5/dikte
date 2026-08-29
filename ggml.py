@@ -348,7 +348,7 @@ def _extract(archive, into):
                     if not target.is_relative_to(root):
                         raise LocalError(t("Could not unpack {name}: {error}",
                                            name=name,
-                                           error="a path reaches outside"))
+                                           error=t("a path reaches outside")))
                 bundle.extractall(into)
         except (zipfile.BadZipFile, OSError) as exc:
             raise LocalError(t("Could not unpack {name}: {error}",

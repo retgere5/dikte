@@ -44,6 +44,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The floor and the ceiling: the Windows backends are the same Python
+        # on 3.12, and a Windows runner costs more than a Linux one, so the
+        # middle version is left to the Linux job above.
         python: ["3.11", "3.13"]
 
     steps:

@@ -128,6 +128,7 @@ TR = {
     "could not clear it": "temizlenemedi",
     "no memory for it": "onun için bellek yok",
     "the clipboard refused it": "pano onu reddetti",
+    "a path reaches outside": "bir yol dışarı taşıyor",
     "sent {sent} of {total} events": "{total} olaydan {sent} tanesi gönderildi",
     "Is ydotoold running? (systemctl --user status ydotool)":
         "ydotoold çalışıyor mu? (systemctl --user status ydotool)",

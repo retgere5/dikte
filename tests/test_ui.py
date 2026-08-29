@@ -340,10 +340,34 @@ class MacSettings(Settings):
                    for index in range(window.paste_shortcut.count())]
         self.assertEqual(offered, paste.MACOS.shortcuts)
 
+
+class WindowsSettings(Settings):
+    """The same window and the same round trip, standing on Windows.
+
+    Nothing here is about Windows either: like MacSettings above, it is the
+    rest of the window, checked on the platform where the same three widgets
+    are gone because there is no shortcut registry and no separate listener
+    to switch off.
+    """
+
+    platform = "win32"
+
+    def test_there_is_no_install_button_where_nothing_is_installed(self):
+        window = self.window(cfg.Config())
+        labels = [button.text() for button in
+                  window.findChildren(settings_ui.QPushButton)]
+        self.assertFalse([text for text in labels if "shortcut" in text.lower()])
+
+    def test_the_listener_is_not_offered_as_a_choice(self):
+        """It is the whole mechanism there; turning it off would leave nothing."""
+        window = self.window(cfg.Config())
+        self.assertFalse(window.evdev_enabled.isVisible())
+
     def test_the_paste_keys_on_offer_are_the_ones_windows_uses(self):
-        with mock.patch.object(sys, "platform", "win32"):
-            self.assertEqual(paste.desktop().shortcuts,
-                             ["ctrl+v", "ctrl+shift+v", "shift+insert"])
+        window = self.window(cfg.Config())
+        offered = [window.paste_shortcut.itemText(index)
+                   for index in range(window.paste_shortcut.count())]
+        self.assertEqual(offered, paste.WINDOWS.shortcuts)
 
 
 class Overlay(DikteTest):

@@ -16,6 +16,7 @@ import tarfile
 import textwrap
 import threading
 import time
+import unittest
 from unittest import mock
 
 import ggml
@@ -416,21 +417,84 @@ class WindowsBinaryName(DikteTest):
 
 
 class WindowsSweep(DikteTest):
+    """_is_ours() on win32: an image path from kernel32, no PowerShell involved.
 
-    def test_ours_is_recognised_from_the_cim_command_line(self):
-        blob = f"llama-server.exe -m {ggml.DATA_DIR}\\models\\x.gguf"
+    Never a subprocess and never a decode, so nothing here can repeat the bug
+    a Turkish DATA_DIR used to trigger: _windows_cmdline shelled out to
+    PowerShell's CIM with subprocess's text=True and no encoding=, which
+    decoded the redirected output with the console codepage. A Turkish
+    account name in DATA_DIR made that decode raise, stdout came back None,
+    and _is_ours answered False for a server that really was Dikte's own,
+    leaving it orphaned. The ctypes path never routes DATA_DIR through any
+    codepage at all: it is compared as a plain Python path.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", "win32"))
+
+    def test_ours_is_recognised_by_its_installed_image_path(self):
+        binary = self.path("bin", "llama", "v1", "llama-server.exe")
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"")
         server = ggml.Server(ggml.LLAMA, lambda s: [], {})
-        with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch.object(ggml, "_windows_cmdline",
-                                  return_value=blob):
+        with mock.patch.object(ggml, "installed_program", return_value=str(binary)), \
+                mock.patch.object(ggml, "_windows_image_path", return_value=str(binary)):
             self.assertTrue(server._is_ours(4242))
 
     def test_somebody_elses_process_is_left_alone(self):
+        binary = self.path("bin", "llama", "v1", "llama-server.exe")
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"")
         server = ggml.Server(ggml.LLAMA, lambda s: [], {})
-        with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch.object(ggml, "_windows_cmdline",
-                                  return_value="notepad.exe"):
+        with mock.patch.object(ggml, "installed_program", return_value=str(binary)), \
+                mock.patch.object(ggml, "_windows_image_path",
+                                  return_value=r"C:\Windows\notepad.exe"):
             self.assertFalse(server._is_ours(4242))
+
+    def test_a_pid_that_cannot_be_asked_is_left_alone(self):
+        # OpenProcess fails for a pid that has already exited, or one that
+        # belongs to another account; _windows_image_path answers "" for both.
+        binary = self.path("bin", "llama", "v1", "llama-server.exe")
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"")
+        server = ggml.Server(ggml.LLAMA, lambda s: [], {})
+        with mock.patch.object(ggml, "installed_program", return_value=str(binary)), \
+                mock.patch.object(ggml, "_windows_image_path", return_value=""):
+            self.assertFalse(server._is_ours(4242))
+
+    def test_a_turkish_data_dir_is_matched_on_its_own_terms(self):
+        # The path this test builds under self.root is real on disk, in
+        # whatever encoding the host filesystem uses; the comparison in
+        # _is_ours is plain pathlib, with no console codepage in between, so
+        # this cannot repeat the CIM decode failure regardless of host locale.
+        turkish_bin = self.path("Kullanıcılar", "Şükrü", "bin", "llama-server.exe")
+        turkish_bin.parent.mkdir(parents=True)
+        turkish_bin.write_bytes(b"")
+        server = ggml.Server(ggml.LLAMA, lambda s: [], {})
+        with mock.patch.object(ggml, "installed_program", return_value=str(turkish_bin)):
+            with mock.patch.object(ggml, "_windows_image_path",
+                                   return_value=str(turkish_bin)):
+                self.assertTrue(server._is_ours(4242))
+            stranger = str(turkish_bin.with_name("notepad.exe"))
+            with mock.patch.object(ggml, "_windows_image_path", return_value=stranger):
+                self.assertFalse(server._is_ours(4242))
+
+
+class WindowsImagePath(DikteTest):
+    """The real kernel32 call _is_ours builds on, run where it can actually run."""
+
+    @unittest.skipUnless(sys.platform == "win32", "needs a real Windows kernel32")
+    def test_a_live_pid_is_answered_with_a_real_path(self):
+        path = ggml._windows_image_path(os.getpid())
+        self.assertTrue(path)
+        self.assertTrue(os.path.isfile(path))
+
+    @unittest.skipUnless(sys.platform == "win32", "needs a real Windows kernel32")
+    def test_a_pid_that_does_not_exist_answers_nothing(self):
+        # OpenProcess failing (an exited pid, or one on another account) is
+        # exactly the "cannot be asked" case _is_ours treats as a stranger.
+        self.assertEqual(ggml._windows_image_path(2**30), "")
 
 
 class WhichCopyRuns(Local):

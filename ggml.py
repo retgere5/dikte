@@ -27,6 +27,7 @@ interface already knows how to show.
 import atexit
 import collections
 import ctypes.util
+import functools
 import hashlib
 import http.client
 import json
@@ -560,23 +561,55 @@ def _tail(path, lines=3):
     return " | ".join(found[-lines:])
 
 
-def _windows_cmdline(pid):
-    """One process's command line, asked of WMI.
+# PROCESS_QUERY_LIMITED_INFORMATION: enough to ask a process what it is,
+# nothing that would let this touch it.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_MAX_PATH_CHARS = 32768   # long enough for a \\?\ prefixed path
 
-    Only the sweep asks, once at startup; a second of PowerShell there is
-    cheaper than killing a stranger's process ever could be.
+
+@functools.lru_cache(maxsize=1)
+def _windows_kernel32():
+    """The bit of kernel32 the sweep asks a live pid what it is.
+
+    Loaded on first use rather than at import, the same seam paste._windows_api()
+    and hotkey._user32() use: this module is read on every system, and WinDLL
+    exists on one of them.
     """
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Process -Filter 'ProcessId="
-             + str(int(pid)) + "').CommandLine"],
-            capture_output=True, text=True, timeout=15,
-            creationflags=spawn.flags(),
-        )
-    except (subprocess.SubprocessError, OSError, ValueError):
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
+    kernel32.QueryFullProcessImageNameW.restype = ctypes.c_int
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    return kernel32
+
+
+def _windows_image_path(pid):
+    """The full path a live pid was launched from, or "" when it cannot be asked.
+
+    Straight to kernel32 rather than shelling out to PowerShell's CIM: a
+    process that no longer exists, or belongs to another account, is exactly
+    what OpenProcess failing means, so there is no decode step here at all -
+    the previous PowerShell version passed its output through subprocess's
+    text=True with no encoding=, which decoded with the console codepage and
+    raised on a non-ASCII (Turkish) DATA_DIR, turning "is this ours" into a
+    silent False and leaking the server sweep() exists to clean up. Answering
+    in-process also means sweep() no longer pays for a PowerShell start (well
+    over a second, cold) on every launch.
+    """
+    kernel32 = _windows_kernel32()
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
         return ""
-    return (result.stdout or "").strip() if result.returncode == 0 else ""
+    try:
+        size = ctypes.c_ulong(_MAX_PATH_CHARS)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 class Server:
@@ -777,12 +810,25 @@ class Server:
         Asked because pids are handed out again: by the time anyone looks, the
         number could belong to something else entirely, and killing it would be
         a good deal worse than the leak being cleaned up. The program name alone
-        could be somebody else's copy; the name together with Dikte's own data
-        directory on the command line could not.
+        could be somebody else's copy; on Linux the name together with Dikte's
+        own data directory on the command line could not.
+
+        Windows has no /proc to read a command line out of without a subprocess,
+        so the question is answered differently there: the exe path a live pid
+        was launched from, compared against the binary this Dikte's own install
+        record under DATA_DIR/bin says it last put there. A custom binary
+        pointed at from Settings, outside that record, will not match; that is
+        a narrower net than the Linux one, traded for never shelling out.
         """
         if sys.platform == "win32":
-            blob = _windows_cmdline(pid)
-            return (self.program.binary in blob and str(DATA_DIR) in blob)
+            path = _windows_image_path(pid)
+            recorded = installed_program(self.program)
+            if not path or not recorded:
+                return False
+            try:
+                return pathlib.Path(path).resolve() == pathlib.Path(recorded).resolve()
+            except OSError:
+                return False
         try:
             blob = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes()
         except OSError:

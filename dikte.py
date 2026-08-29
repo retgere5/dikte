@@ -30,6 +30,16 @@ if sys.platform == "darwin":
                           os.environ.get("PATH", "")) if part
     )
 
+# On Windows both CreateProcess and shutil.which search the current working
+# directory before PATH, so a planted ffmpeg.exe (or claude.exe, or git.exe)
+# sitting beside whatever file the user is dictating over would run instead
+# of the real one on PATH (CWE-427). This is a process-wide setting read once
+# at startup by both lookups, not a per-call choice, so it belongs here next
+# to the other early environment setup rather than in spawn.py, which is only
+# about resolving .cmd/.bat shims once a name is already found.
+if sys.platform == "win32":
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
+
 from PyQt6.QtCore import QTimer, QElapsedTimer, QSocketNotifier  # noqa: E402
 from PyQt6.QtGui import QAction, QIcon  # noqa: E402
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402

@@ -15,6 +15,7 @@ from unittest import mock
 
 import cli
 import config as cfg
+import dikte
 import hotkey
 import ipc
 import spawn
@@ -541,6 +542,29 @@ class WindowsLaunch(DikteTest):
         self.assertEqual(args[0], sys.executable)
         self.assertIn("--gui", args)
         self.assertIn("toggle", args)
+        self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
+                          expected_flags)
+
+
+class WindowsRestart(DikteTest):
+    """Dikte.restart's win32 branch: the twin of WindowsLaunch above.
+
+    os._exit(0) is guarded by DikteTest.setUp (support._no_exit) rather than
+    left to run for real, which would end this test process looking like a
+    clean pass instead of failing loudly.
+    """
+
+    def test_restart_spawns_rather_than_execs_on_windows(self):
+        fake = mock.Mock(settings_window=None)
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(dikte.subprocess, "Popen") as popen, \
+                mock.patch.object(dikte.QLocalServer, "removeServer"), \
+                self.assertRaises(AssertionError):
+            expected_flags = spawn.flags()
+            dikte.Dikte.restart(fake)
+        args = popen.call_args.args[0]
+        self.assertEqual(args[0], sys.executable)
+        self.assertIn("--gui", args)
         self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
                           expected_flags)
 

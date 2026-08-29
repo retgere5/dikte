@@ -54,6 +54,14 @@ def _no_exec(*args, **kwargs):
     )
 
 
+def _no_exit(*args, **kwargs):
+    raise AssertionError(
+        "a test reached os._exit, which would end the test process outright "
+        "(status 0, looking like success) instead of failing loudly; patch "
+        "subprocess.Popen and assert against this guard instead"
+    )
+
+
 class DikteTest(unittest.TestCase):
     """A test that owns its config, its data directory and its language."""
 
@@ -84,6 +92,13 @@ class DikteTest(unittest.TestCase):
         # instance is running. A test that reaches it would take the whole run
         # with it and hang, so it fails loudly here instead.
         self.patch_attr(os, "execv", _no_exec)
+
+        # Dikte.restart's win32 branch reaches for this instead of execv (exec
+        # does not replace a process on Windows). A test that reaches it would
+        # not hang like execv would; it would end the whole test process with
+        # exit status 0, which looks like every test passed. Patched the same
+        # way, so a test exercising that branch has to expect this failure.
+        self.patch_attr(os, "_exit", _no_exit)
 
         # Every way out of here goes through urllib, so closing it is enough to
         # keep the suite offline. A test that means to answer a request patches

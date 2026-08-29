@@ -8,6 +8,7 @@ one that was always there and is checked here only for still being taken.
 
 import os
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -19,12 +20,37 @@ from tests.support import DikteTest, fake_urlopen, sent_json, url_error
 from tests.test_api import FakeServer, chat_reply
 
 
+class Call:
+    """One recorded subprocess.run call: the argv, the kwargs, and whatever a
+    --*-file argument pointed at while the file still existed (cleanup.py
+    deletes it again once the call returns)."""
+
+    def __init__(self, cmd, kwargs, system_prompt_file=""):
+        self.cmd = cmd
+        self.kwargs = kwargs
+        self.system_prompt_file = system_prompt_file
+
+    @property
+    def input(self):
+        """What was written to stdin, or "" when nothing was."""
+        return self.kwargs.get("input", "")
+
+
+def _read_file_arg(cmd, flag):
+    if flag in cmd:
+        with open(cmd[cmd.index(flag) + 1], encoding="utf-8") as fh:
+            return fh.read()
+    return ""
+
+
 def fake_run(stdout="", code=0, stderr="", last_message=""):
     """Stand in for subprocess.run, writing the file Codex would have written."""
     calls = []
 
     def run(cmd, **kwargs):
-        calls.append(cmd)
+        system_prompt_file = (_read_file_arg(cmd, "--system-prompt-file")
+                              or _read_file_arg(cmd, "--append-system-prompt-file"))
+        calls.append(Call(cmd, kwargs, system_prompt_file))
         if last_message and "-o" in cmd:
             with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as fh:
                 fh.write(last_message)
@@ -97,38 +123,67 @@ class ClaudeCode(DikteTest):
         # cmd[0] on this machine and break the assertions below.
         self.patch_attr(cleanup.spawn, "resolve", lambda cmd: cmd)
 
-    def run_cleanup(self, text="uh, book it", **kwargs):
+    def run_cleanup(self, text="uh, book it", rules="the rules", **kwargs):
         patcher, calls = fake_run(**kwargs)
         with patcher:
-            answer = cleanup.run(text, self.conf, "the rules")
+            answer = cleanup.run(text, self.conf, rules)
         return answer, calls[0]
 
-    def test_the_transcript_goes_in_fenced_and_the_rules_go_in_as_the_prompt(self):
-        answer, cmd = self.run_cleanup(stdout="Book it.\n")
+    def test_the_transcript_goes_in_over_stdin_and_the_rules_go_in_as_a_file(self):
+        answer, call = self.run_cleanup(stdout="Book it.\n")
         self.assertEqual(answer, "Book it.")
-        self.assertEqual(cmd[0], "claude")
-        self.assertIn("<transcript>\nuh, book it\n</transcript>", cmd)
-        self.assertEqual(cmd[cmd.index("--system-prompt") + 1], "the rules")
-        self.assertEqual(cmd[cmd.index("--model") + 1], "haiku")
+        self.assertEqual(call.cmd[0], "claude")
+        self.assertEqual(call.input, "<transcript>\nuh, book it\n</transcript>")
+        self.assertIn("--system-prompt-file", call.cmd)
+        self.assertEqual(call.system_prompt_file, "the rules")
+        self.assertEqual(call.cmd[call.cmd.index("--model") + 1], "haiku")
+
+    def test_the_temp_file_holding_the_rules_does_not_stay_behind(self):
+        _, call = self.run_cleanup(stdout="Book it.")
+        prompt_file = call.cmd[call.cmd.index("--system-prompt-file") + 1]
+        self.assertFalse(os.path.exists(prompt_file))
+
+    def test_the_transcript_never_rides_in_argv(self):
+        # It is untrusted, speech-to-text material, and a resolved .cmd shim
+        # runs by handing the whole command line to cmd.exe: putting it in
+        # argv is what truncates it at the first CR/LF and lets a quote plus
+        # "&" run a second command.
+        _, call = self.run_cleanup(
+            text='line one\nline two "q" & echo PWNED', stdout="Book it.")
+        self.assertFalse(any("PWNED" in part or "\n" in part for part in call.cmd))
+
+    def test_the_rules_never_ride_in_argv_either(self):
+        # The rules (config.CLEANUP_PROMPT_EN by default) are themselves a
+        # multi-line constant, so putting them in argv would truncate
+        # --system-prompt-file's own successor flags (--tools "" among them)
+        # the same way the transcript would.
+        _, call = self.run_cleanup(
+            rules='line one\nline two "q" & echo PWNED', stdout="Book it.")
+        self.assertFalse(any("PWNED" in part or "\n" in part for part in call.cmd))
+        self.assertEqual(call.system_prompt_file,
+                         'line one\nline two "q" & echo PWNED')
 
     def test_it_is_given_nothing_to_run_and_nothing_to_remember(self):
-        _, cmd = self.run_cleanup(stdout="Book it.")
+        _, call = self.run_cleanup(stdout="Book it.")
+        cmd = call.cmd
         self.assertEqual(cmd[cmd.index("--tools") + 1], "")
         self.assertIn("--strict-mcp-config", cmd)
         self.assertIn("--no-session-persistence", cmd)
 
     def test_the_thinking_setting_is_carried_over_in_its_own_words(self):
         self.conf["cleanup_reasoning"] = "none"
-        _, cmd = self.run_cleanup(stdout="Book it.")
+        _, call = self.run_cleanup(stdout="Book it.")
+        cmd = call.cmd
         self.assertEqual(cmd[cmd.index("--effort") + 1], "low")
 
     def test_no_thinking_setting_means_no_flag(self):
-        _, cmd = self.run_cleanup(stdout="Book it.")
-        self.assertNotIn("--effort", cmd)
+        _, call = self.run_cleanup(stdout="Book it.")
+        self.assertNotIn("--effort", call.cmd)
 
     def test_a_model_of_your_own(self):
         self.conf["cleanup_claude_model"] = "claude-sonnet-5"
-        _, cmd = self.run_cleanup(stdout="Book it.")
+        _, call = self.run_cleanup(stdout="Book it.")
+        cmd = call.cmd
         self.assertEqual(cmd[cmd.index("--model") + 1], "claude-sonnet-5")
 
     def test_an_answer_of_nothing_is_a_failure_rather_than_an_empty_paste(self):
@@ -164,12 +219,38 @@ class ClaudeCode(DikteTest):
 class Output(DikteTest):
     """_output is what actually runs the CLI; both claude and codex go through it."""
 
-    def test_it_runs_without_a_console_window(self):
+    def test_it_runs_without_a_console_window_on_windows(self):
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(cleanup.shutil, "which", return_value="/usr/bin/claude"), \
+                mock.patch.object(subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
+            cleanup._output(["claude", "-p"], 180, "Claude")
+        self.assertEqual(run.call_args.kwargs.get("creationflags"), spawn.flags())
+        self.assertNotEqual(run.call_args.kwargs.get("creationflags"), 0)
+
+    def test_no_console_flag_off_windows(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(cleanup.shutil, "which", return_value="/usr/bin/claude"), \
+                mock.patch.object(subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
+            cleanup._output(["claude", "-p"], 180, "Claude")
+        self.assertEqual(run.call_args.kwargs.get("creationflags"), 0)
+
+    def test_input_text_is_sent_on_stdin_rather_than_left_to_close(self):
         with mock.patch.object(cleanup.shutil, "which", return_value="/usr/bin/claude"), \
                 mock.patch.object(subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
-            cleanup._output(["claude", "-p", "hi"], 180, "Claude")
-        self.assertEqual(run.call_args.kwargs.get("creationflags", 0), spawn.flags())
+            cleanup._output(["claude", "-p"], 180, "Claude", input_text="hello")
+        self.assertEqual(run.call_args.kwargs.get("input"), "hello")
+        self.assertNotIn("stdin", run.call_args.kwargs)
+
+    def test_with_no_input_text_stdin_is_closed(self):
+        with mock.patch.object(cleanup.shutil, "which", return_value="/usr/bin/claude"), \
+                mock.patch.object(subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
+            cleanup._output(["claude", "-p"], 180, "Claude")
+        self.assertEqual(run.call_args.kwargs.get("stdin"), subprocess.DEVNULL)
+        self.assertNotIn("input", run.call_args.kwargs)
 
 
 class Codex(DikteTest):
@@ -183,47 +264,97 @@ class Codex(DikteTest):
         patcher, calls = fake_run(**kwargs)
         with patcher:
             answer = cleanup.run(text, self.conf, "the rules")
-        return answer, calls[0]
+        call = calls[0]
+        return answer, call.cmd, call.input
 
-    def test_the_rules_ride_in_front_of_the_transcript(self):
-        answer, cmd = self.run_cleanup(last_message="Book it.\n")
+    def test_the_rules_ride_in_front_of_the_transcript_over_stdin(self):
+        answer, cmd, sent = self.run_cleanup(last_message="Book it.\n")
         self.assertEqual(answer, "Book it.")
         self.assertEqual(cmd[:2], ["codex", "exec"])
-        self.assertEqual(cmd[-1],
+        self.assertEqual(sent,
                          "the rules\n\n---\n\n<transcript>\nuh, book it\n</transcript>")
 
+    def test_the_body_never_rides_in_argv(self):
+        # Same reasoning as ClaudeCode.test_the_transcript_never_rides_in_argv:
+        # cmd.exe truncates and can be made to run a second command once a
+        # bare "codex" resolves to the .cmd shim npm installs.
+        _, cmd, _ = self.run_cleanup(
+            text='line one\nline two "q" & echo PWNED', last_message="Book it.")
+        self.assertFalse(any("PWNED" in part or "\n" in part for part in cmd))
+
     def test_the_answer_is_read_from_the_file_rather_than_the_noise_on_stdout(self):
-        answer, _ = self.run_cleanup(
+        answer, _, _ = self.run_cleanup(
             stdout="workdir: /home\nmodel: gpt-5.4\ntokens used 400\n",
             last_message="Book it.",
         )
         self.assertEqual(answer, "Book it.")
 
     def test_that_file_does_not_stay_behind(self):
-        _, cmd = self.run_cleanup(last_message="Book it.")
+        _, cmd, _ = self.run_cleanup(last_message="Book it.")
         self.assertFalse(os.path.exists(cmd[cmd.index("-o") + 1]))
 
     def test_it_may_read_but_not_write_and_has_nobody_to_ask(self):
-        _, cmd = self.run_cleanup(last_message="Book it.")
+        _, cmd, _ = self.run_cleanup(last_message="Book it.")
         self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
         self.assertIn('approval_policy="never"', cmd)
         self.assertIn("--ephemeral", cmd)
 
     def test_the_model_is_left_alone_until_one_is_typed_in(self):
-        _, cmd = self.run_cleanup(last_message="Book it.")
+        _, cmd, _ = self.run_cleanup(last_message="Book it.")
         self.assertNotIn("-m", cmd)
         self.conf["cleanup_codex_model"] = "gpt-5.4"
-        _, cmd = self.run_cleanup(last_message="Book it.")
+        _, cmd, _ = self.run_cleanup(last_message="Book it.")
         self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.4")
 
     def test_the_thinking_setting_lands_on_the_nearest_rung_codex_has(self):
         self.conf["cleanup_reasoning"] = "xhigh"
-        _, cmd = self.run_cleanup(last_message="Book it.")
+        _, cmd, _ = self.run_cleanup(last_message="Book it.")
         self.assertIn('model_reasoning_effort="high"', cmd)
 
     def test_an_answer_of_nothing(self):
         with self.assertRaises(cleanup.CleanupError):
             self.run_cleanup(stdout="tokens used 400", last_message="")
+
+
+class ResolvedOnWindows(DikteTest):
+    """I14: spawn.resolve() actually runs at _output's subprocess.run call,
+    and the transcript reaches the CLI over stdin rather than as an argv
+    element a resolved .cmd shim would hand to cmd.exe. Unlike ClaudeCode and
+    Codex above, this does not stub spawn.resolve away."""
+
+    def test_claude_is_launched_at_its_resolved_path_with_the_transcript_on_stdin(self):
+        conf = self.config(cleanup_provider="claude")
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(cleanup.shutil, "which",
+                                  return_value=r"C:\bin\claude.cmd"), \
+                mock.patch.object(subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                ["claude"], 0, "Book it.", "")
+            cleanup.run("uh, book it\nwith a second line", conf, "the rules")
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[0], r"C:\bin\claude.cmd")
+        self.assertFalse(any("\n" in part for part in cmd))
+        self.assertIn("uh, book it\nwith a second line",
+                      run.call_args.kwargs.get("input", ""))
+
+    def test_codex_is_launched_at_its_resolved_path_with_the_body_on_stdin(self):
+        conf = self.config(cleanup_provider="codex")
+
+        def run(cmd, **kwargs):
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as fh:
+                fh.write("Book it.")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(cleanup.shutil, "which",
+                                  return_value=r"C:\bin\codex.cmd"), \
+                mock.patch.object(subprocess, "run", side_effect=run) as run_mock:
+            cleanup.run("uh, book it\nwith a second line", conf, "the rules")
+        cmd = run_mock.call_args.args[0]
+        self.assertEqual(cmd[0], r"C:\bin\codex.cmd")
+        self.assertFalse(any("\n" in part for part in cmd))
+        self.assertIn("uh, book it\nwith a second line",
+                      run_mock.call_args.kwargs.get("input", ""))
 
 
 if __name__ == "__main__":

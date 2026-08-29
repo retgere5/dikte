@@ -111,23 +111,39 @@ def _wrap(text):
 # --- Claude Code ----------------------------------------------------------
 
 def _claude(text, conf, system_prompt, timeout):
-    cmd = [
-        "claude", "-p", _wrap(text),
-        # --system-prompt rather than --append-system-prompt: the cleanup rules
-        # are the whole job, and Claude Code's own instructions are about
-        # working on a codebase.
-        "--system-prompt", system_prompt,
-        "--model", model(conf),
-        "--output-format", "text",
-        "--tools", "",                                    # nothing to run
-        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-        "--no-session-persistence",                       # nothing to resume
-    ]
-    effort = assistant.CLAUDE_EFFORT.get(conf["cleanup_reasoning"], "")
-    if effort:
-        cmd += ["--effort", effort]
+    # The transcript is speech-to-text, so it is both untrusted and often
+    # multi-line; it travels over stdin (which -p reads when no prompt is
+    # given on the command line) rather than as an argv element, because on
+    # Windows a bare "claude" resolves to the .cmd shim npm installs, and
+    # CreateProcess runs a .cmd by handing the whole command line to cmd.exe,
+    # which re-parses every argument. cmd.exe truncates at the first CR/LF
+    # (breaking this silently) and, on Python before 3.11.9, lets a quote
+    # plus "&" in the text run a second command.
+    #
+    # The cleanup rules (system_prompt) are themselves a multi-line constant
+    # (see config.CLEANUP_PROMPT_EN), so the same truncation would cut off
+    # --system-prompt's own value mid-sentence and silently drop every flag
+    # after it, including --tools "" and --strict-mcp-config; it goes to a
+    # temp file instead, via --system-prompt-file, whose path has no
+    # newlines of its own.
+    with spawn.temp_text_file(system_prompt, prefix="dikte-cleanup-sys-") as prompt_file:
+        cmd = [
+            "claude", "-p",
+            # --system-prompt-file rather than --append-system-prompt-file:
+            # the cleanup rules are the whole job, and Claude Code's own
+            # instructions are about working on a codebase.
+            "--system-prompt-file", prompt_file,
+            "--model", model(conf),
+            "--output-format", "text",
+            "--tools", "",                                    # nothing to run
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--no-session-persistence",                       # nothing to resume
+        ]
+        effort = assistant.CLAUDE_EFFORT.get(conf["cleanup_reasoning"], "")
+        if effort:
+            cmd += ["--effort", effort]
 
-    answer = _output(cmd, timeout, "Claude")
+        answer = _output(cmd, timeout, "Claude", input_text=_wrap(text))
     if not answer:
         raise CleanupError(t("{service} answered with nothing.", service="Claude"))
     return answer
@@ -137,7 +153,11 @@ def _claude(text, conf, system_prompt, timeout):
 
 def _codex(text, conf, system_prompt, timeout):
     # Codex takes no system prompt of its own, so the rules ride in front of the
-    # transcript, kept apart from it so the two are not read as one.
+    # transcript, kept apart from it so the two are not read as one. Like
+    # Claude above, the combined body is untrusted and often multi-line, so it
+    # goes over stdin instead of as the trailing argv element: the same
+    # cmd.exe truncation/injection risk applies once "codex" resolves to the
+    # .cmd shim npm installs.
     body = f"{system_prompt}\n\n---\n\n{_wrap(text)}"
     cmd = [
         "codex", "exec",
@@ -157,9 +177,9 @@ def _codex(text, conf, system_prompt, timeout):
     # answer; the file it writes on the way out is the answer on its own.
     handle, last_message = tempfile.mkstemp(prefix="dikte-cleanup-", suffix=".txt")
     os.close(handle)
-    cmd += ["-o", last_message, body]
+    cmd += ["-o", last_message]
     try:
-        _output(cmd, timeout, "Codex")
+        _output(cmd, timeout, "Codex", input_text=body)
         answer = _read(last_message)
     finally:
         try:
@@ -182,12 +202,19 @@ def _read(path):
 
 # --- running a CLI --------------------------------------------------------
 
-def _output(cmd, timeout, service):
+def _output(cmd, timeout, service, input_text=None):
     """Run cmd to the end and return what it printed.
 
     It runs in the home directory rather than wherever the agent is pointed: a
     project's instructions have opinions about how text should be written, and
     none of them are about this transcript.
+
+    `input_text`, when given, is written to the child's stdin instead of
+    closing it: this is how the untrusted transcript reaches the CLI without
+    ever appearing on a command line a resolved .cmd shim would hand to
+    cmd.exe. It is the same choice on every platform, since claude/codex read
+    stdin the same way everywhere and Linux/macOS have no cmd.exe to protect
+    against; only spawn.resolve() and spawn.flags() differ by platform.
     """
     binary = cmd[0]
     if not shutil.which(binary):
@@ -195,13 +222,17 @@ def _output(cmd, timeout, service):
             "{binary} not found. Install it, or have OpenRouter clean up "
             "instead, under Settings → API and models.", binary=binary,
         ))
+    kwargs = dict(
+        cwd=os.path.expanduser("~"), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=timeout,
+        creationflags=spawn.flags(),
+    )
+    if input_text is None:
+        kwargs["stdin"] = subprocess.DEVNULL
+    else:
+        kwargs["input"] = input_text
     try:
-        done = subprocess.run(
-            spawn.resolve(cmd), cwd=os.path.expanduser("~"),
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-            creationflags=spawn.flags(),
-        )
+        done = subprocess.run(spawn.resolve(cmd), **kwargs)
     except subprocess.TimeoutExpired:
         raise CleanupError(t("{service} did not finish within {seconds} seconds.",
                              service=service, seconds=timeout)) from None

@@ -226,39 +226,55 @@ class _SessionGone(Exception):
 # --- Claude Code ----------------------------------------------------------
 
 def _ask_claude(prompt, conf, session, on_stage, should_stop):
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "stream-json", "--verbose",
-        "--model", conf["assistant_model"],
-        "--permission-mode", conf["assistant_permission_mode"],
-        "--append-system-prompt", conf.assistant_prompt(),
-    ]
-    effort = CLAUDE_EFFORT.get(conf["assistant_reasoning"], "")
-    if effort:
-        cmd += ["--effort", effort]
-    if session:
-        cmd += ["--resume", session]
+    # The command being spoken is untrusted, often multi-line, and is what
+    # cleanup.py's _claude and _codex have the same problem with: on Windows
+    # "claude" resolves to the .cmd shim npm installs, and CreateProcess runs
+    # a .cmd by handing the whole command line to cmd.exe, which truncates at
+    # the first CR/LF and, before Python 3.11.9, lets a quote plus "&" run a
+    # second command. It goes over stdin instead, which -p reads when no
+    # prompt is given on the command line.
+    #
+    # The instruction (assistant_prompt) is itself a multi-line default (see
+    # config.ASSISTANT_PROMPT_EN) or a multi-line one typed into Settings, so
+    # the same truncation would cut off --append-system-prompt's own value
+    # mid-sentence and silently drop every flag after it, including
+    # --model and --permission-mode; it goes to a temp file instead, via
+    # --append-system-prompt-file, whose path has no newlines of its own.
+    with spawn.temp_text_file(conf.assistant_prompt(),
+                              prefix="dikte-assistant-sys-") as prompt_file:
+        cmd = [
+            "claude", "-p",
+            "--output-format", "stream-json", "--verbose",
+            "--model", conf["assistant_model"],
+            "--permission-mode", conf["assistant_permission_mode"],
+            "--append-system-prompt-file", prompt_file,
+        ]
+        effort = CLAUDE_EFFORT.get(conf["assistant_reasoning"], "")
+        if effort:
+            cmd += ["--effort", effort]
+        if session:
+            cmd += ["--resume", session]
 
-    found = {"answer": "", "warning": "", "session": "", "failure": ""}
+        found = {"answer": "", "warning": "", "session": "", "failure": ""}
 
-    def on_event(event):
-        kind = event.get("type")
-        if kind == "system" and event.get("subtype") == "init":
-            found["session"] = event.get("session_id") or found["session"]
-        elif kind == "assistant" and on_stage:
-            for block in event.get("message", {}).get("content", []) or []:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    on_stage(_claude_label(block))
-        elif kind == "result":
-            found["session"] = event.get("session_id") or found["session"]
-            answer = (event.get("result") or "").strip()
-            if event.get("is_error"):
-                found["failure"] = answer or t("Claude ended with an error.")
-            else:
-                found["answer"] = answer
-            found["warning"] = _denial_warning(event)
+        def on_event(event):
+            kind = event.get("type")
+            if kind == "system" and event.get("subtype") == "init":
+                found["session"] = event.get("session_id") or found["session"]
+            elif kind == "assistant" and on_stage:
+                for block in event.get("message", {}).get("content", []) or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        on_stage(_claude_label(block))
+            elif kind == "result":
+                found["session"] = event.get("session_id") or found["session"]
+                answer = (event.get("result") or "").strip()
+                if event.get("is_error"):
+                    found["failure"] = answer or t("Claude ended with an error.")
+                else:
+                    found["answer"] = answer
+                found["warning"] = _denial_warning(event)
 
-    code, stderr = _stream(cmd, conf, on_event, should_stop)
+        code, stderr = _stream(cmd, conf, on_event, should_stop, input_text=prompt)
     return _conclude(found, code, stderr, session, "Claude")
 
 
@@ -289,6 +305,9 @@ def _denial_warning(event):
 def _ask_codex(prompt, conf, session, on_stage, should_stop):
     # Codex takes no system prompt of its own, so the instruction rides along in
     # front of the command, kept apart from it so the two are not read as one.
+    # The combined body carries the same untrusted, often multi-line command
+    # as _ask_claude above, so it travels over stdin rather than as the
+    # trailing argv element, for the same cmd.exe truncation/injection reason.
     body = f"{conf.assistant_prompt()}\n\n---\n\n{prompt}"
     settings = [
         "-c", f'sandbox_mode="{conf["assistant_codex_sandbox"]}"',
@@ -303,7 +322,7 @@ def _ask_codex(prompt, conf, session, on_stage, should_stop):
         settings += ["-c", f'model_reasoning_effort="{effort}"']
 
     cmd = (["codex", "exec", "resume", session] if session else ["codex", "exec"])
-    cmd += settings + [body]
+    cmd += settings
 
     found = {"answer": "", "warning": "", "session": "", "failure": ""}
 
@@ -326,7 +345,7 @@ def _ask_codex(prompt, conf, session, on_stage, should_stop):
             found["failure"] = (error.get("message") if isinstance(error, dict)
                                 else str(error)) or t("Codex ended with an error.")
 
-    code, stderr = _stream(cmd, conf, on_event, should_stop)
+    code, stderr = _stream(cmd, conf, on_event, should_stop, input_text=body)
     return _conclude(found, code, stderr, session, "Codex")
 
 
@@ -368,15 +387,26 @@ def _ask_openrouter(prompt, conf, on_stage):
 
 # --- running a CLI --------------------------------------------------------
 
-def _stream(cmd, conf, on_event, should_stop):
+def _stream(cmd, conf, on_event, should_stop, input_text=None):
     """Run cmd, hand every JSON line it prints to on_event.
 
     Returns (exit code, stderr). Raises Cancelled when the stop was asked for,
     and AssistantError when the clock ran out.
+
+    `input_text`, when given, is written to the child's stdin and the pipe is
+    closed, instead of being handed to it as an argv element: the command
+    being asked is untrusted and often multi-line, and on Windows "claude"/
+    "codex" resolve to the .cmd shim npm installs, which CreateProcess runs by
+    handing the whole command line to cmd.exe. That truncates at the first
+    CR/LF and, before Python 3.11.9, lets a quote plus "&" run a second
+    command; stdin never goes near cmd.exe's parser. It is written before the
+    stdout loop below starts, since a moment's thinking is exactly when the
+    CLI is not yet reading its own stdout back.
     """
     try:
         proc = subprocess.Popen(
-            spawn.resolve(cmd), cwd=working_dir(conf), stdin=subprocess.DEVNULL,
+            spawn.resolve(cmd), cwd=working_dir(conf),
+            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=spawn.flags(),
@@ -384,6 +414,16 @@ def _stream(cmd, conf, on_event, should_stop):
     except OSError as exc:
         raise AssistantError(t("Could not run {binary}: {error}",
                                binary=cmd[0], error=exc)) from exc
+
+    if input_text is not None:
+        try:
+            proc.stdin.write(input_text)
+            proc.stdin.close()
+        except (OSError, ValueError):
+            # The child may have exited (or closed its own end) before the
+            # write; whatever is wrong with it shows up as a normal failure
+            # once its exit code and stderr are read below.
+            pass
 
     # Reading the stream blocks between lines, and a model that thinks for a
     # minute sends none. So the clock and the stop button are watched from the

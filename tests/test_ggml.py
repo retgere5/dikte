@@ -445,31 +445,27 @@ class WindowsAssets(DikteTest):
         self.enterContext(mock.patch.object(sys, "platform", "win32"))
 
     def test_llama_prefers_vulkan_when_the_loader_is_there(self):
-        with mock.patch.object(ggml, "_has_vulkan", return_value=True), \
-                mock.patch.object(ggml.platform, "machine",
-                                  return_value="AMD64"):
+        self.patch_attr(ggml, "_arch", lambda: "x64")
+        with mock.patch.object(ggml, "_has_vulkan", return_value=True):
             self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
                              ("bin-win-vulkan-x64.zip", "bin-win-cpu-x64.zip"))
 
     def test_llama_without_vulkan_stays_on_the_cpu(self):
-        with mock.patch.object(ggml, "_has_vulkan", return_value=False), \
-                mock.patch.object(ggml.platform, "machine",
-                                  return_value="AMD64"):
+        self.patch_attr(ggml, "_arch", lambda: "x64")
+        with mock.patch.object(ggml, "_has_vulkan", return_value=False):
             self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
                              ("bin-win-cpu-x64.zip",))
 
     def test_whisper_takes_the_plain_x64_zip_by_its_full_name(self):
         # "whisper-blas-bin-x64.zip" also ends with "bin-x64.zip"; the full
         # name is the only ending that cannot match the wrong archive.
-        with mock.patch.object(ggml.platform, "machine",
-                               return_value="AMD64"):
-            self.assertEqual(ggml._wanted_assets(ggml.WHISPER),
-                             ("whisper-bin-x64.zip",))
+        self.patch_attr(ggml, "_arch", lambda: "x64")
+        self.assertEqual(ggml._wanted_assets(ggml.WHISPER),
+                         ("whisper-bin-x64.zip",))
 
     def test_an_arm64_windows_machine_is_told_the_truth(self):
-        with mock.patch.object(ggml.platform, "machine",
-                               return_value="ARM64"), \
-                mock.patch.object(ggml, "_has_vulkan", return_value=False):
+        self.patch_attr(ggml, "_arch", lambda: "arm64")
+        with mock.patch.object(ggml, "_has_vulkan", return_value=False):
             self.assertEqual(ggml._wanted_assets(ggml.LLAMA),
                              ("bin-win-cpu-arm64.zip",))
             self.assertEqual(ggml._wanted_assets(ggml.WHISPER), ())

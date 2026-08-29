@@ -894,6 +894,10 @@ class Dikte:
         self.shutdown()
         QLocalServer.removeServer(SERVER_NAME)
         if sys.platform == "win32":
+            # exec does not replace a process on Windows, so a fresh process
+            # (sharing this one's console and standard handles, same as
+            # cli.launch_gui; neither call detaches it) plus a plain exit here
+            # lands in the same place.
             subprocess.Popen([sys.executable, ipc.script_path(), "--gui"],
                              close_fds=True, creationflags=spawn.flags())
             os._exit(0)

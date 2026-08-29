@@ -134,8 +134,9 @@ def launch_gui(verb=""):
     """No instance running, so become the application itself.
 
     exec does not replace a process on Windows: the parent would linger and
-    share its console with the child. A fresh detached process and a plain
-    exit land in the same place.
+    share its console with the child. A fresh process (it still shares the
+    parent's console and standard handles, it is not detached) followed by a
+    plain exit lands in the same place.
     """
     args = [sys.executable, ipc.script_path()]
     if verb:

@@ -13,6 +13,7 @@ import ast
 import collections
 import ctypes
 import ctypes.util
+import functools
 import glob
 import os
 import pathlib
@@ -478,8 +479,13 @@ class _Msg(ctypes.Structure):
                 ("pt_x", ctypes.c_long), ("pt_y", ctypes.c_long)]
 
 
+@functools.lru_cache(maxsize=1)
 def _user32():
-    """user32 and kernel32, typed the way the listener above uses them."""
+    """user32 and kernel32, typed the way the listener above uses them.
+
+    Cached like paste._windows_api() and api._ws2_32(): the argtypes only need
+    setting once, not on every start()/stop().
+    """
     try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32")

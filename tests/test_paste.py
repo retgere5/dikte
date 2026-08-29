@@ -6,10 +6,13 @@ for. A paste that presses the wrong keys, or in the wrong order, types nothing
 and looks like a hang.
 
 Every system owes the same promises about the clipboard, so those are written
-once and run against each of them. A fourth one added to paste.py inherits the
-same list rather than needing its own copy of it. Each class says which system
-it is standing on, which is why none of this is skipped anywhere: the Linux half
-is checked on a Mac and the macOS half on Linux, and a change to the chooser
+once and run against each of them: the ones that hold regardless of mechanism
+in ClipboardContract, and the extra ones a program shelled out to also owes in
+SubprocessClipboardContract. Windows, which goes through user32 instead of a
+program, inherits the first list and keeps its own tests for the rest, rather
+than needing its own copy of either. Each class says which system it is
+standing on, which is why none of this is skipped anywhere: the Linux half is
+checked on a Mac and the macOS half on Linux, and a change to the chooser
 cannot quietly break the platform nobody is sitting at.
 """
 
@@ -23,6 +26,7 @@ import unittest
 from typing import ClassVar
 from unittest import mock
 
+import i18n
 import paste
 from tests.support import DikteTest, FakeCompleted, only_these_tools
 
@@ -82,7 +86,23 @@ class Standing:
 
 
 class ClipboardContract(Standing):
-    """What every system owes the text on its way to the clipboard."""
+    """What every system owes the text on its way to the clipboard, whichever
+    mechanism it goes through: every offered shortcut has to be one press()
+    can actually send. A family that shells out to a program owes the rest
+    of it too, checked in SubprocessClipboardContract below; Windows, which
+    calls straight into user32, inherits this half on its own and adds its
+    own tests for the rest.
+    """
+
+    def test_the_paste_key_it_offers_is_one_it_can_press(self):
+        """Whatever Settings lists, pressing it must not come back unknown."""
+        for shortcut in self.here.shortcuts:
+            with self.subTest(shortcut=shortcut):
+                self.assertTrue(self.pressing(shortcut))
+
+
+class SubprocessClipboardContract(ClipboardContract):
+    """The half of it that shells out to a program: xclip, wl-copy, pbcopy."""
 
     def test_no_reader_installed(self):
         with only_these_tools():
@@ -160,12 +180,6 @@ class ClipboardContract(Standing):
             paste.copy_bytes(b"\x89PNG\r\n")
         self.assertEqual(run.call_args.kwargs["input"], b"\x89PNG\r\n")
 
-    def test_the_paste_key_it_offers_is_one_it_can_press(self):
-        """Whatever Settings lists, pressing it must not come back unknown."""
-        for shortcut in self.here.shortcuts:
-            with self.subTest(shortcut=shortcut):
-                self.assertTrue(self.pressing(shortcut))
-
 
 class KeyProgramContract(Standing):
     """The half of it that is another program: ydotool, xdotool."""
@@ -218,7 +232,7 @@ class KeyProgramContract(Standing):
         self.assertEqual(self.press(""), self.press(self.here.shortcuts[0]))
 
 
-class Wayland(ClipboardContract, KeyProgramContract, DikteTest):
+class Wayland(SubprocessClipboardContract, KeyProgramContract, DikteTest):
     env: ClassVar[dict] = {"XDG_SESSION_TYPE": "wayland",
                            "WAYLAND_DISPLAY": "wayland-0"}
     here = paste.WAYLAND
@@ -244,7 +258,7 @@ class Wayland(ClipboardContract, KeyProgramContract, DikteTest):
         self.assertIn("ydotoold", str(caught.exception))
 
 
-class X11(ClipboardContract, KeyProgramContract, DikteTest):
+class X11(SubprocessClipboardContract, KeyProgramContract, DikteTest):
     env: ClassVar[dict] = {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"}
     here = paste.X11
 
@@ -304,7 +318,7 @@ class FakeCoreGraphics:
         self.released.append(event)
 
 
-class MacOS(ClipboardContract, DikteTest):
+class MacOS(SubprocessClipboardContract, DikteTest):
     platform = "darwin"
     here = paste.MACOS
 
@@ -440,15 +454,17 @@ class FakeWin32:
     """user32+kernel32 with a real clipboard buffer behind them.
 
     GlobalAlloc hands out real ctypes buffers so that the memmove and
-    wstring_at inside paste.py operate on actual memory; what the fake keeps
+    string_at inside paste.py operate on actual memory; what the fake keeps
     is the call order, which is the contract Windows holds us to.
     """
 
     CF_UNICODETEXT = 13
 
-    def __init__(self, open_answers=(1,), clipboard_text=None):
+    def __init__(self, open_answers=(1,), clipboard_text=None,
+                 unterminated_text=None):
         self.calls = []
         self.buffers = {}
+        self.sizes = {}                # handle -> what GlobalSize should answer
         self.stored = None            # handle put in by SetClipboardData
         self.open_answers = list(open_answers)
         self.get_handle = 0
@@ -456,6 +472,21 @@ class FakeWin32:
             data = clipboard_text.encode("utf-16-le") + b"\x00\x00"
             buf = ctypes.create_string_buffer(data, len(data))
             self.buffers[999] = buf
+            self.get_handle = 999
+        if unterminated_text is not None:
+            # A block another process filled exactly to GlobalSize's edge,
+            # with real (non-NUL) memory sitting right after it and no
+            # CF_UNICODETEXT terminator anywhere inside the block itself.
+            # wstring_at with no length bound would read straight through
+            # into that memory; only trusting GlobalSize tells the two
+            # apart deterministically, without relying on the allocator
+            # happening to hand back zeroed pages beyond the block.
+            data = unterminated_text.encode("utf-16-le")
+            beyond = "-not part of the clipboard-".encode("utf-16-le")
+            buf = ctypes.create_string_buffer(data + beyond + b"\x00\x00",
+                                              len(data) + len(beyond) + 2)
+            self.buffers[999] = buf
+            self.sizes[999] = len(data)
             self.get_handle = 999
 
     # user32 half
@@ -496,6 +527,13 @@ class FakeWin32:
         self.buffers.pop(handle, None)
         return None
 
+    def GlobalSize(self, handle):
+        return self.sizes.get(handle, len(self.buffers[handle]))
+
+    def SendInput(self, count, array, size):
+        self.calls.append("send")
+        return count
+
     def stored_text(self):
         # The buffer is exactly as long as the payload _windows_copy sized it
         # for, so decoding the whole thing and dropping the CF_UNICODETEXT
@@ -505,20 +543,34 @@ class FakeWin32:
         return raw.decode("utf-16-le").rstrip("\x00")
 
 
-class WindowsClipboard(DikteTest):
+class WindowsClipboard(ClipboardContract, DikteTest):
     """The promises every system owes, kept through calls instead of programs."""
 
     platform = "win32"
-
-    def setUp(self):
-        super().setUp()
-        self.enterContext(mock.patch.object(sys, "platform", self.platform))
-        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+    here = paste.WINDOWS
 
     def fake(self, **kwargs):
         api = FakeWin32(**kwargs)
         self.patch_attr(paste, "_windows_api", lambda: (api, api))
         return api
+
+    def pressing(self, shortcut):
+        """The contract's own check that a shortcut is one press() can send."""
+        self.fake()
+        with mock.patch.object(paste.time, "sleep", lambda seconds: None):
+            paste.press(shortcut)
+        return True
+
+    def test_there_is_nothing_to_restore(self):
+        api = self.fake()
+        paste.copy_bytes(None)
+        self.assertEqual(api.calls, [])
+
+    def test_restoring_never_raises(self):
+        """It runs after the paste went in; failing here must not undo that."""
+        self.fake(open_answers=[0, 0, 0, 0, 0])
+        with mock.patch.object(paste.time, "sleep"):
+            paste.copy_bytes(b"whatever was there before")
 
     def test_the_text_goes_in_as_utf16_with_turkish_intact(self):
         api = self.fake()
@@ -532,6 +584,13 @@ class WindowsClipboard(DikteTest):
         self.fake(clipboard_text="hello")
         self.assertEqual(paste.read_clipboard(), b"hello")
 
+    def test_an_unterminated_block_is_cut_at_globalsize_not_a_crash(self):
+        """A block another process filled to the edge with no CF_UNICODETEXT
+        NUL is where wstring_at would run off the end of it; GlobalSize is
+        the only bound that can be trusted."""
+        self.fake(unterminated_text="hello")
+        self.assertEqual(paste.read_clipboard(), b"hello")
+
     def test_an_empty_clipboard_is_not_an_error(self):
         self.fake()                      # no text: GetClipboardData answers 0
         self.assertIsNone(paste.read_clipboard())
@@ -543,6 +602,19 @@ class WindowsClipboard(DikteTest):
             paste.copy("hello")
         self.assertEqual(api.calls.count("open"), 5)
 
+    def test_the_held_clipboard_message_is_readable_in_turkish(self):
+        """The fragment named who is holding it is author-chosen text, not an
+        OS exception, so it needs its own TR entry or a Turkish user reads
+        half of the sentence in English."""
+        i18n.set_language("tr")
+        self.fake(open_answers=[0, 0, 0, 0, 0])
+        with mock.patch.object(paste.time, "sleep"), \
+                self.assertRaises(paste.PasteError) as caught:
+            paste.copy("hello")
+        message = str(caught.exception)
+        self.assertNotIn("holding it", message)
+        self.assertIn("tutuyor", message)
+
     def test_a_held_clipboard_reads_as_empty_rather_than_crashing(self):
         self.fake(open_answers=[0, 0, 0, 0, 0])
         with mock.patch.object(paste.time, "sleep"):
@@ -553,12 +625,31 @@ class WindowsClipboard(DikteTest):
         paste.copy_bytes("önce".encode("utf-8"))
         self.assertEqual(api.stored_text(), "önce")
 
+    def test_a_failure_to_empty_it_is_reported(self):
+        api = self.fake()
+        api.EmptyClipboard = lambda: 0
+        with self.assertRaises(paste.PasteError):
+            paste.copy("hello")
+
     def test_a_missing_api_names_the_failure(self):
         self.patch_attr(paste, "_windows_api",
                         mock.Mock(side_effect=paste.PasteError("no user32")))
-        with self.assertRaises(paste.PasteError):
+        with self.assertRaises(paste.PasteError) as caught:
             paste.copy("hello")
+        self.assertIn("no user32", str(caught.exception))
         self.assertIsNone(paste.read_clipboard())
+
+    def test_the_missing_api_itself_names_what_would_not_load(self):
+        """_windows_api is lru_cached, so a run through its own try/except
+        needs the cache cleared first or an earlier test's memoized result
+        would answer instead of this one's WinDLL."""
+        paste._windows_api.cache_clear()
+        self.addCleanup(paste._windows_api.cache_clear)
+        with mock.patch.object(paste.ctypes, "WinDLL", create=True,
+                               side_effect=OSError("no such DLL")), \
+                self.assertRaises(paste.PasteError) as caught:
+            paste._windows_api()
+        self.assertIn("no such DLL", str(caught.exception))
 
 
 class WindowsPress(DikteTest):
@@ -603,6 +694,20 @@ class WindowsPress(DikteTest):
         with mock.patch.object(paste.time, "sleep"), \
                 self.assertRaises(paste.PasteError):
             paste._windows_press("ctrl+v", 0)
+
+    def test_a_refused_send_is_readable_in_turkish_too(self):
+        """How many of how many events got through is author-chosen text
+        built with an f-string, not an OS exception; it needs its own TR
+        entry the same as the other fragments here do."""
+        i18n.set_language("tr")
+        api = paste._windows_api()[0]
+        api.SendInput = lambda count, array, size: 0
+        with mock.patch.object(paste.time, "sleep"), \
+                self.assertRaises(paste.PasteError) as caught:
+            paste._windows_press("ctrl+v", 0)
+        message = str(caught.exception)
+        self.assertNotIn("events", message)
+        self.assertIn("gönderildi", message)
 
     def test_the_delay_lets_focus_come_back_first(self):
         with mock.patch.object(paste.time, "sleep") as sleep:

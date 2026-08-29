@@ -1,11 +1,14 @@
 """Clipboard and key injection, through whatever this machine gives us.
 
 A Wayland session has wl-clipboard and ydotool, an X11 one has xclip and
-xdotool, and macOS has pbcopy with the key press going straight to
-CoreGraphics. Which of them is here gets decided in one place, and each is a
-small group of functions below it: another desktop, or another operating
-system, adds a group and a line to the chooser rather than a branch inside
-every function here.
+xdotool, macOS has pbcopy with the key press going straight to CoreGraphics,
+and Windows has neither a clipboard program nor a keyboard-injection program
+worth the name, so it goes through user32 and kernel32 directly: a Desktop
+entry there fills read_call and copy_call with those functions instead of
+read_command and copy_command. Which of them is here gets decided in one
+place, and each is a small group of functions below it: another desktop, or
+another operating system, adds a group and a line to the chooser rather than
+a branch inside every function here.
 """
 
 import collections
@@ -313,6 +316,8 @@ def _windows_api():
     kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
     user32.SendInput.restype = ctypes.c_uint
     user32.SendInput.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]
     return user32, kernel32
@@ -333,29 +338,40 @@ def _windows_copy(payload):
     data = payload.decode("utf-8", "replace").encode("utf-16-le") + b"\x00\x00"
     if not _open_clipboard(user32):
         raise PasteError(t("Could not copy to clipboard: {error}",
-                           error="another program is holding it"))
+                           error=t("another program is holding it")))
     try:
-        user32.EmptyClipboard()
+        if not user32.EmptyClipboard():
+            raise PasteError(t("Could not copy to clipboard: {error}",
+                               error=t("could not clear it")))
         handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
         pointer = kernel32.GlobalLock(handle) if handle else None
         if not pointer:
             if handle:
                 kernel32.GlobalFree(handle)
             raise PasteError(t("Could not copy to clipboard: {error}",
-                               error="no memory for it"))
+                               error=t("no memory for it")))
         ctypes.memmove(pointer, data, len(data))
         kernel32.GlobalUnlock(handle)
         if not user32.SetClipboardData(CF_UNICODETEXT, handle):
             # Only on refusal is the handle still ours to free.
             kernel32.GlobalFree(handle)
             raise PasteError(t("Could not copy to clipboard: {error}",
-                               error="the clipboard refused it"))
+                               error=t("the clipboard refused it")))
     finally:
         user32.CloseClipboard()
 
 
 def _windows_read():
-    """What is on the clipboard as UTF-8 bytes, or None."""
+    """What is on the clipboard as UTF-8 bytes, or None.
+
+    GlobalSize is the only trustworthy bound on the block: a CF_UNICODETEXT
+    handle from another process is not guaranteed to be NUL-terminated where
+    ctypes.wstring_at would stop looking, and reading past the end of it is
+    an access violation or a slice of unrelated heap. Reading exactly that
+    many bytes and decoding with errors='replace' turns a malformed block
+    into replacement characters instead of a crash; the terminator (there is
+    usually one) is then trimmed like any other trailing content.
+    """
     try:
         user32, kernel32 = _windows_api()
     except PasteError:
@@ -370,11 +386,16 @@ def _windows_read():
         if not pointer:
             return None
         try:
-            text = ctypes.wstring_at(pointer)
+            size = kernel32.GlobalSize(handle)
+            raw = ctypes.string_at(pointer, size)
         finally:
             kernel32.GlobalUnlock(handle)
     finally:
         user32.CloseClipboard()
+    text = raw.decode("utf-16-le", "replace")
+    nul = text.find("\x00")
+    if nul != -1:
+        text = text[:nul]
     return text.encode("utf-8")
 
 
@@ -486,8 +507,11 @@ def _key_event(vk, up):
 def _windows_press(shortcut, delay):
     """Send the key down and up straight into the window system.
 
-    UIPI stops input reaching a window running elevated; the text is still on
-    the clipboard then, and the error the caller shows says what to press.
+    UIPI stops input reaching a window running elevated, but per Microsoft's
+    SendInput documentation that failure is silent by design: neither the
+    return value nor GetLastError says it happened, so sent == len(events)
+    and no PasteError is raised. The text is still on the clipboard, but
+    Dikte cannot tell the paste did not land and will report success.
     """
     keys = _windows_keys(shortcut)
     user32, _ = _windows_api()
@@ -498,7 +522,8 @@ def _windows_press(shortcut, delay):
     sent = user32.SendInput(len(events), array, ctypes.sizeof(_Input))
     if sent != len(events):
         raise PasteError(t("Could not run {tool}: {error}", tool="SendInput",
-                           error=f"sent {sent} of {len(events)} events"))
+                           error=t("sent {sent} of {total} events",
+                                   sent=sent, total=len(events))))
 
 
 WINDOWS = Desktop(

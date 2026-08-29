@@ -124,6 +124,11 @@ TR = {
     "Unknown key: {key}": "Bilinmeyen tuş: {key}",
     "Could not run {tool}: {error}": "{tool} çalıştırılamadı: {error}",
     "{tool} failed: {error}": "{tool} hatası: {error}",
+    "another program is holding it": "başka bir program onu tutuyor",
+    "could not clear it": "temizlenemedi",
+    "no memory for it": "onun için bellek yok",
+    "the clipboard refused it": "pano onu reddetti",
+    "sent {sent} of {total} events": "{total} olaydan {sent} tanesi gönderildi",
     "Is ydotoold running? (systemctl --user status ydotool)":
         "ydotoold çalışıyor mu? (systemctl --user status ydotool)",
     "macOS has not been told to let Dikte press keys. Turn Dikte on under "

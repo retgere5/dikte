@@ -17,6 +17,7 @@ import textwrap
 import threading
 import time
 import unittest
+import zipfile
 from unittest import mock
 
 import ggml
@@ -76,6 +77,15 @@ def tarball(entries):
             info.size = len(content)
             info.mode = 0o755
             tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+def zipped(entries):
+    """A .zip laid out the way the Windows releases are: one directory of files."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as bundle:
+        for name, content in entries.items():
+            bundle.writestr(name, content)
     return buf.getvalue()
 
 
@@ -341,6 +351,91 @@ class InstallProgram(Local):
         self.patch_attr(ggml, "_arch", lambda: "x64")
         self.patch_attr(ggml, "_has_vulkan", lambda: False)
         self.assertEqual(ggml._wanted_assets(ggml.LLAMA), ("bin-ubuntu-x64.tar.gz",))
+
+
+class WindowsInstallProgram(Local):
+    """The win32 half of install_program: a zip archive and an .exe binary.
+
+    A sibling of InstallProgram rather than a subclass of it: InstallProgram's
+    own test methods assume a tarball fetched on linux, and would fail here
+    for reasons that have nothing to do with what this class exists to check.
+    Nothing in InstallProgram otherwise exercises this path (its setUp pins
+    sys.platform to linux and builds a tarball), so a regression that reverted
+    _find_binary(into, _binary_name(program)) back to program.binary would
+    pass the whole suite while a real Windows install could never find
+    whisper-server.exe.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.patch_attr(sys, "platform", "win32")
+        self.patch_attr(ggml, "_arch", lambda: "x64")
+        self.archive = zipped({
+            "whisper-bin-x64/whisper-server.exe": b"MZ not really a pe\x00",
+            "whisper-bin-x64/whisper.dll": b"not really a library",
+        })
+
+    def release(self, *names, archive=None):
+        digest = hashlib.sha256(self.archive if archive is None else archive)
+        return {"tag_name": "v1.9.1", "assets": [
+            {"name": name, "browser_download_url": f"https://example.invalid/{name}",
+             "size": 10, "digest": "sha256:" + digest.hexdigest()}
+            for name in names]}
+
+    def install(self, *names, archive=None):
+        blob = self.archive if archive is None else archive
+        with serving(self.release(*names, archive=blob), blob) as calls:
+            path = ggml.install_program(ggml.WHISPER)
+        return path, [call.args[0].full_url for call in calls.call_args_list]
+
+    def test_the_exe_and_its_dll_land_together(self):
+        path, _ = self.install("whisper-bin-x64.zip")
+        self.assertTrue(path.endswith("whisper-server.exe"))
+        self.assertTrue(os.path.isfile(path))
+        self.assertTrue(os.path.isfile(
+            os.path.join(os.path.dirname(path), "whisper.dll")))
+
+    def test_the_installed_record_names_the_exe(self):
+        path, _ = self.install("whisper-bin-x64.zip")
+        self.assertTrue(path.endswith("whisper-server.exe"))
+        self.assertEqual(ggml.installed_program(ggml.WHISPER), path)
+
+    def test_the_blas_variant_is_not_mistaken_for_the_plain_one(self):
+        # "whisper-blas-bin-x64.zip" also ends with "bin-x64.zip"; the full
+        # asset name is the only ending that cannot match the decoy.
+        decoy = zipped({"whisper-blas-bin-x64/whisper-server.exe": b"decoy"})
+        listing = {"tag_name": "v1.9.1", "assets": [
+            {"name": "whisper-blas-bin-x64.zip",
+             "browser_download_url": "https://example.invalid/decoy.zip",
+             "size": 10,
+             "digest": "sha256:" + hashlib.sha256(decoy).hexdigest()},
+            {"name": "whisper-bin-x64.zip",
+             "browser_download_url": "https://example.invalid/whisper-bin-x64.zip",
+             "size": 10,
+             "digest": "sha256:" + hashlib.sha256(self.archive).hexdigest()},
+        ]}
+        with serving(listing, self.archive) as calls:
+            path = ggml.install_program(ggml.WHISPER)
+        self.assertTrue(path.endswith("whisper-server.exe"))
+        urls = [call.args[0].full_url for call in calls.call_args_list]
+        self.assertTrue(urls[-1].endswith("whisper-bin-x64.zip"))
+
+    def test_an_archive_without_the_exe_names_the_exe_not_the_bare_binary(self):
+        # ggml.py:408 used to interpolate program.binary here ("whisper-server"
+        # was not in the download."), which is not what a Windows user was
+        # actually told to look for.
+        empty = zipped({"whisper-bin-x64/README.txt": b"nothing here"})
+        with self.assertRaises(ggml.LocalError) as caught:
+            self.install("whisper-bin-x64.zip", archive=empty)
+        self.assertIn("whisper-server.exe", str(caught.exception))
+
+    def test_an_arm64_machine_is_told_to_bring_its_own_binary(self):
+        self.patch_attr(ggml, "_arch", lambda: "arm64")
+        listing = self.release("whisper-bin-x64.zip")
+        with fake_urlopen(listing):
+            with self.assertRaises(ggml.LocalError) as caught:
+                ggml.install_program(ggml.WHISPER)
+        self.assertIn("whisper-server.exe", str(caught.exception))
 
 
 class WindowsAssets(DikteTest):

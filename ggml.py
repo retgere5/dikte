@@ -404,10 +404,11 @@ def install_program(program, tag="", on_progress=None, should_stop=None,
         if not download(item, archive, on_progress, should_stop):
             return ""
         _extract(archive, into)
-        binary = _find_binary(into, _binary_name(program))
+        name = _binary_name(program)
+        binary = _find_binary(into, name)
         if binary is None:
             raise LocalError(t("{name} was not in the download.",
-                               name=program.binary))
+                               name=name))
         binary.chmod(binary.stat().st_mode | 0o111)
         _install_record(program).write_text(
             json.dumps({"tag": tag, "binary": str(binary)}), encoding="utf-8")

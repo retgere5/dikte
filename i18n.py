@@ -372,6 +372,8 @@ TR = {
     "holds it.":
         "Windows {shortcut} kısayolunu Dikte'ye vermedi; başka bir uygulama "
         "onu tutuyor.",
+    "Lost the Windows message queue; the shortcuts are no longer active.":
+        "Windows ileti kuyruğu koptu; kısayollar artık etkin değil.",
     "Cannot read /dev/input. Your user needs to be in the 'input' group:\n"
     "  sudo usermod -aG input $USER   (then log out and back in)":
         "/dev/input okunamıyor. Kullanıcının 'input' grubunda olması gerekir:\n"

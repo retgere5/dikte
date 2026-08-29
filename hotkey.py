@@ -602,8 +602,20 @@ class WindowsHotkey(QObject):
         if not held:
             return
         message = _Msg()
+        queue_died = False
         try:
-            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+            while True:
+                result = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
+                if result == 0:
+                    break
+                if result == -1:
+                    # GetMessageW failing kills the queue this thread reads:
+                    # every hotkey it registered goes silently deaf unless
+                    # something says so here, in the thread that saw it die.
+                    # A normal 0 return (WM_QUIT from stop()) is not this: it
+                    # leaves _REGISTERED for stop() itself to clear.
+                    queue_died = True
+                    break
                 if message.message == WM_HOTKEY:
                     name = names.get(message.wParam)
                     if name:
@@ -611,6 +623,12 @@ class WindowsHotkey(QObject):
         finally:
             for identifier in held:
                 user32.UnregisterHotKey(None, identifier)
+            if queue_died:
+                _REGISTERED.clear()
+                self.failed.emit(t(
+                    "Lost the Windows message queue; the shortcuts are "
+                    "no longer active."
+                ))
 
 
 # --- the desktop's own shortcut -------------------------------------------

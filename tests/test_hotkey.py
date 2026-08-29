@@ -567,9 +567,10 @@ class FakeUser32:
     were registered and unregistered, with which modifiers.
     """
 
-    def __init__(self, refuse=(), messages=()):
+    def __init__(self, refuse=(), messages=(), error=False):
         self.refuse = set(refuse)          # vk codes to refuse
         self.messages = list(messages)     # wParam values to deliver
+        self.error = error                 # GetMessageW returns -1 once drained
         self.registered = []               # (id, modifiers, vk)
         self.unregistered = []
 
@@ -585,7 +586,7 @@ class FakeUser32:
 
     def GetMessageW(self, message, hwnd, low, high):
         if not self.messages:
-            return 0
+            return -1 if self.error else 0
         wparam = self.messages.pop(0)
         target = message._obj if hasattr(message, "_obj") else message
         target.message = hotkey.WM_HOTKEY
@@ -658,6 +659,68 @@ class WindowsListener(DikteTest):
         listener.start({"toggle": "Ctrl+Space"})
         listener._thread.join(timeout=2)
         self.assertEqual(hotkey.shortcut_status(hotkey.DESKTOP_ID), "Ctrl+Space")
+
+    def test_a_dead_message_queue_is_reported_and_clears_the_status(self):
+        """GetMessageW returning -1 ends the loop the way stop() never gets
+        a chance to: silently, unless the thread itself says so."""
+        listener = self.wire(FakeUser32(error=True))
+        complaints = []
+        listener.failed.connect(complaints.append, Qt.ConnectionType.DirectConnection)
+        self.assertTrue(listener.start({"toggle": "Ctrl+Space"}))
+        listener._thread.join(timeout=2)
+        self.assertTrue(complaints)
+        self.assertIsNone(hotkey.shortcut_status(hotkey.DESKTOP_ID))
+
+    def test_no_user32_reports_failure_and_start_returns_false(self):
+        """The except-OSError branch in start(): no ctypes access at all."""
+        listener = hotkey.WindowsHotkey()
+        self.patch_attr(hotkey, "_user32",
+                        mock.Mock(side_effect=OSError("no such library")))
+        complaints = []
+        listener.failed.connect(complaints.append, Qt.ConnectionType.DirectConnection)
+        self.assertFalse(listener.start({"toggle": "Ctrl+Space"}))
+        self.assertTrue(complaints)
+        self.assertIn("no such library", complaints[0])
+
+    def test_a_binding_with_no_shortcut_is_skipped(self):
+        listener = self.wire(FakeUser32())
+        self.assertFalse(listener.start({"toggle": "", "ask": ""}))
+
+    def test_two_bindings_fire_under_their_own_names(self):
+        """One binding hides a bug that always reports the first name
+        registered; two bindings, firing the second one, closes that hole."""
+        fake = FakeUser32(messages=[2])
+        listener = self.wire(fake)
+        heard = []
+        listener.triggered.connect(heard.append, Qt.ConnectionType.DirectConnection)
+        self.assertTrue(listener.start({"toggle": "Ctrl+Space",
+                                        "ask": "Ctrl+Shift+Space"}))
+        listener._thread.join(timeout=2)
+        self.assertEqual(heard, ["ask"])
+
+    def test_an_unknown_wparam_is_dropped(self):
+        fake = FakeUser32(messages=[99])
+        listener = self.wire(fake)
+        heard = []
+        listener.triggered.connect(heard.append, Qt.ConnectionType.DirectConnection)
+        self.assertTrue(listener.start({"toggle": "Ctrl+Space"}))
+        listener._thread.join(timeout=2)
+        self.assertEqual(heard, [])
+
+    def test_starting_twice_does_not_leave_the_first_registration_behind(self):
+        first, second = FakeUser32(), FakeUser32()
+        kernel32 = mock.Mock()
+        kernel32.GetCurrentThreadId.return_value = 4242
+        listener = hotkey.WindowsHotkey()
+        self.addCleanup(listener.stop)
+        with mock.patch.object(hotkey, "_user32", lambda: (first, kernel32)):
+            listener.start({"toggle": "Ctrl+Space"})
+            listener._thread.join(timeout=2)
+        with mock.patch.object(hotkey, "_user32", lambda: (second, kernel32)):
+            listener.start({"toggle": "Ctrl+Shift+Space"})
+        self.assertEqual(first.unregistered, [1])
+        self.assertEqual(second.registered,
+                         [(1, 0x0002 | 0x0004 | hotkey.MOD_NOREPEAT, 0x20)])
 
 
 class ListenerChooser(DikteTest):

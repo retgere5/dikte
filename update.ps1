@@ -30,4 +30,11 @@ try {
     # install.ps1's own defaults.
 }
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "install.ps1") @installArgs
+# The same gate as the git pull above: install.ps1 exits 1 on missing/too-old
+# Python or a failed PyQt6 install, and without this check that failure was
+# silently followed by a restart into a tree whose dependencies never landed.
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [!] install.ps1 failed; not restarting into a broken install." -ForegroundColor Yellow
+    exit 1
+}
 & python "$Dir\dikte.py" restart | Out-Null

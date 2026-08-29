@@ -186,9 +186,19 @@ def _force_close(sock):
     handle while any reference remains. Calling WinSock's own closesocket()
     on the raw handle skips both of those and drops the connection outright,
     which is what actually unblocks the read.
+
+    detach() is called first so Python no longer thinks it owns the handle.
+    Without it, closesocket() here frees the handle while conn.close() still
+    runs later (deferred behind http.client's own file-object refs on it);
+    by then Windows may have handed that same handle number to a brand new
+    socket somewhere else in the process, and the stale close() would sever
+    that unrelated live connection instead of doing nothing. detach() sets
+    this socket object's fd to -1, so every close() still to come on it,
+    here or in urllib/http.client, is a harmless no-op.
     """
+    fd = sock.detach()
     with contextlib.suppress(OSError):
-        _ws2_32().closesocket(sock.fileno())
+        _ws2_32().closesocket(fd)
 
 
 class _TrackedHTTP(urllib.request.HTTPHandler):

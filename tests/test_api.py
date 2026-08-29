@@ -718,22 +718,34 @@ class ForceClose(unittest.TestCase):
     def test_the_raw_handle_is_passed_to_closesocket(self):
         fake = self.fake()
         sock = self.raw_socket()
+        fd = sock.fileno()
         api._force_close(sock)
-        self.assertEqual(fake.closed, [sock.fileno()])
+        self.assertEqual(fake.closed, [fd])
 
     def test_a_failure_to_close_is_swallowed_not_raised(self):
         fake = self.fake(error=OSError("no such socket"))
         sock = self.raw_socket()
+        fd = sock.fileno()
         api._force_close(sock)     # must not raise
-        self.assertEqual(fake.closed, [sock.fileno()])
+        self.assertEqual(fake.closed, [fd])
+
+    def test_the_socket_is_detached_before_closing(self):
+        """detach() first means the Python object's own close(), whenever it
+        eventually runs, is a no-op instead of a call that could land on a
+        handle number Windows has since recycled for an unrelated socket."""
+        fake = self.fake()
+        sock = self.raw_socket()
+        api._force_close(sock)
+        self.assertEqual(sock.fileno(), -1)
 
     def test_stop_using_falls_back_to_it_on_windows(self):
         fake = self.fake()
         sock = self.raw_socket()
+        fd = sock.fileno()
         conn = mock.Mock(sock=sock, auto_open=1)
         with mock.patch.object(api.sys, "platform", "win32"):
             api._stop_using(conn)
-        self.assertEqual(fake.closed, [sock.fileno()])
+        self.assertEqual(fake.closed, [fd])
 
     def test_it_is_not_reached_off_windows(self):
         fake = self.fake()

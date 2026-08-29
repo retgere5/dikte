@@ -64,19 +64,26 @@ playing.
 On Windows, PowerShell does the same job. Recording goes through ffmpeg's
 dshow input, so ffmpeg is needed for dictation itself:
 
-    winget install Gyan.FFmpeg Python.Python.3.13
-    python -m pip install PyQt6
-    powershell -ExecutionPolicy Bypass -File install.ps1
+```powershell
+winget install Gyan.FFmpeg Python.Python.3.13
+python -m pip install PyQt6
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
 
 `install.ps1` adds the `dikte` command, a Start menu entry, an autostart
 entry and the two shortcuts, which Dikte holds itself through RegisterHotKey
-while it runs; unlike the Linux listener it does swallow the key. Two limits
-are Windows's own: auto-paste cannot reach a window running as administrator
-(the text is still on the clipboard), and a meeting's far side needs a
-loopback device, "Stereo Mix" where the driver offers it or VB-Cable where it
-does not, the same role BlackHole plays on a Mac. The GPU builds fetched for
-llama.cpp use Vulkan; a CUDA build wants its separate cudart download, so
-point Settings at your own binary if that is the one you need.
+while it runs; unlike the Linux listener it does swallow the key. `update.ps1`
+pulls and puts all of that back, keeping the shortcuts you chose;
+`uninstall.ps1` takes it away again and leaves your settings and dictations
+alone unless you pass `-Purge`. Two limits are Windows's own: auto-paste
+cannot reach a window running as administrator, and because UIPI leaves no
+trace that it blocked anything, Dikte cannot tell that it failed either - it
+reports success while the text sits on the clipboard, so press Ctrl+V
+yourself; a meeting's far side also needs a loopback device, "Stereo Mix"
+where the driver offers it or VB-Cable where it does not, the same role
+BlackHole plays on a Mac. The GPU builds fetched for llama.cpp use Vulkan; a
+CUDA build wants its separate cudart download, so point Settings at your own
+binary if that is the one you need.
 
 `install.sh` adds the `dikte` command, a menu entry, an autostart entry and the
 two global shortcuts, whose keys are its two arguments. `./update.sh` pulls and

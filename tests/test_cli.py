@@ -17,6 +17,7 @@ import cli
 import config as cfg
 import hotkey
 import ipc
+import spawn
 from tests.support import DikteTest, fake_urlopen
 
 
@@ -530,11 +531,18 @@ class WindowsLaunch(DikteTest):
         with mock.patch.object(sys, "platform", "win32"), \
                 mock.patch.object(cli.subprocess, "Popen") as popen, \
                 self.assertRaises(SystemExit):
+            # Captured while still patched: spawn.flags() reads sys.platform
+            # itself, and the patch is undone by the time this with-statement
+            # exits (assertRaises swallows the SystemExit, but only after every
+            # context manager above it has already unwound).
+            expected_flags = spawn.flags()
             cli.launch_gui("toggle")
         args = popen.call_args.args[0]
         self.assertEqual(args[0], sys.executable)
         self.assertIn("--gui", args)
         self.assertIn("toggle", args)
+        self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
+                          expected_flags)
 
 
 class Replies(DikteTest):

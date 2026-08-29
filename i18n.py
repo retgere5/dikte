@@ -107,11 +107,11 @@ TR = {
     "ffmpeg not found. Install it with: brew install ffmpeg":
         "ffmpeg bulunamadı. Şununla kur: brew install ffmpeg",
     "ffmpeg not found. Install it with: winget install Gyan.FFmpeg":
-        "ffmpeg bulunamadı. Şununla kurun: winget install Gyan.FFmpeg",
+        "ffmpeg bulunamadı. Şununla kur: winget install Gyan.FFmpeg",
     "whisper.cpp publishes no Windows build for this machine. Point Settings "
     "at a whisper-server.exe of your own.":
         "whisper.cpp bu makine için Windows derlemesi yayınlamıyor. Ayarlar'ı "
-        "kendi whisper-server.exe'nize yöneltin.",
+        "kendi whisper-server.exe'ne yönelt.",
     "Audio recorder stopped before receiving sound: {error}":
         "Ses kayıt aracı veri alamadan kapandı: {error}",
     "Could not copy to clipboard: {error}": "Panoya kopyalanamadı: {error}",

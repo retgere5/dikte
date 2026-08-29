@@ -13,6 +13,7 @@ is up, which is the one thing this module has to fill in for it.
 import collections
 import contextlib
 import ctypes
+import functools
 import http.client
 import json
 import mimetypes
@@ -156,6 +157,23 @@ def _stop_using(conn):
         conn.close()
 
 
+@functools.lru_cache(maxsize=1)
+def _ws2_32():
+    """The one Winsock function _force_close needs, typed and loaded once.
+
+    Loaded on first use rather than at import, the same way paste._windows_api()
+    and hotkey._user32() load their own WinDLLs: this module is read on every
+    system, and WinDLL exists on one of them. A single cached accessor also
+    gives tests one seam to replace, so _force_close runs under a fake on
+    every platform instead of only ever executing, unverified, on whichever
+    CI runner happens to be Windows.
+    """
+    ws2_32 = ctypes.WinDLL("ws2_32", use_last_error=True)
+    ws2_32.closesocket.restype = ctypes.c_int
+    ws2_32.closesocket.argtypes = [ctypes.c_void_p]
+    return ws2_32
+
+
 def _force_close(sock):
     """Make sure `sock` is really closed, blocked reader or not.
 
@@ -170,7 +188,7 @@ def _force_close(sock):
     which is what actually unblocks the read.
     """
     with contextlib.suppress(OSError):
-        ctypes.WinDLL("ws2_32", use_last_error=True).closesocket(sock.fileno())
+        _ws2_32().closesocket(sock.fileno())
 
 
 class _TrackedHTTP(urllib.request.HTTPHandler):

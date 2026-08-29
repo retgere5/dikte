@@ -12,9 +12,11 @@ a server of their own on the loopback interface.
 import http.server
 import json
 import os
+import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
 import api
 import ggml
@@ -676,6 +678,70 @@ class Sockets(unittest.TestCase):
         sockets.add(conn)
         sockets.cut()
         self.assertEqual(conn.auto_open, 0)
+
+
+class ForceClose(unittest.TestCase):
+    """_stop_using's Windows-only fallback: Winsock's own closesocket().
+
+    Winsock does not wake a thread blocked in recv() when shutdown() runs on
+    the same socket from another thread, so on win32 _stop_using also closes
+    the raw handle directly. Faked here through _ws2_32, the same
+    cached-accessor seam paste._windows_api() and hotkey._user32() use for
+    their own WinDLL calls, this runs and is checked on every platform
+    instead of only ever executing, unverified, on whichever CI runner is
+    Windows.
+    """
+
+    class FakeWs2_32:
+        def __init__(self, error=None):
+            self.closed = []
+            self._error = error
+
+        def closesocket(self, handle):
+            self.closed.append(handle)
+            if self._error is not None:
+                raise self._error
+            return 0
+
+    def fake(self, error=None):
+        fake = self.FakeWs2_32(error=error)
+        patcher = mock.patch.object(api, "_ws2_32", lambda: fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fake
+
+    def raw_socket(self):
+        sock = socket.socket()
+        self.addCleanup(sock.close)
+        return sock
+
+    def test_the_raw_handle_is_passed_to_closesocket(self):
+        fake = self.fake()
+        sock = self.raw_socket()
+        api._force_close(sock)
+        self.assertEqual(fake.closed, [sock.fileno()])
+
+    def test_a_failure_to_close_is_swallowed_not_raised(self):
+        fake = self.fake(error=OSError("no such socket"))
+        sock = self.raw_socket()
+        api._force_close(sock)     # must not raise
+        self.assertEqual(fake.closed, [sock.fileno()])
+
+    def test_stop_using_falls_back_to_it_on_windows(self):
+        fake = self.fake()
+        sock = self.raw_socket()
+        conn = mock.Mock(sock=sock, auto_open=1)
+        with mock.patch.object(api.sys, "platform", "win32"):
+            api._stop_using(conn)
+        self.assertEqual(fake.closed, [sock.fileno()])
+
+    def test_it_is_not_reached_off_windows(self):
+        fake = self.fake()
+        sock = self.raw_socket()
+        conn = mock.Mock(sock=sock, auto_open=1)
+        with mock.patch.object(api.sys, "platform", "linux"):
+            api._stop_using(conn)
+        self.assertEqual(fake.closed, [])
 
 
 class Aborter(unittest.TestCase):

@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import spawn
+from dikte import spawn
 
 
 class Flags(unittest.TestCase):

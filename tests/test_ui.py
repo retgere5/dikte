@@ -13,12 +13,12 @@ from unittest import mock
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-import cleanup
-import config as cfg
-import hotkey
-import overlay as overlay_module
-import paste
-import settings_ui
+from dikte import cleanup
+from dikte import config as cfg
+from dikte import hotkey
+from dikte import overlay as overlay_module
+from dikte import paste
+from dikte import settings_ui
 from tests.support import DikteTest, only_these_tools
 
 # One application for the whole run; Qt allows no second one.

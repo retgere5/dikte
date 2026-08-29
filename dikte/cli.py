@@ -23,17 +23,17 @@ import time
 
 from PyQt6.QtCore import QCoreApplication, QTimer
 
-import api
-import assistant
-import audio
-import cleanup
-import config as cfg
-import filetranscribe
-import hotkey
-import ipc
-import meeting
-import paste
-import spawn
+from . import api
+from . import assistant
+from . import audio
+from . import cleanup
+from . import config as cfg
+from . import filetranscribe
+from . import hotkey
+from . import ipc
+from . import meeting
+from . import paste
+from . import spawn
 
 NOT_RUNNING = 3
 
@@ -138,13 +138,15 @@ def launch_gui(verb=""):
     parent's console and standard handles, it is not detached) followed by a
     plain exit lands in the same place.
     """
-    args = [sys.executable, ipc.script_path()]
+    args = [sys.executable, "-m", "dikte"]
     if verb:
         args.append(verb)
     args.append("--gui")
+    env = ipc.child_env()
     if sys.platform == "win32":
-        subprocess.Popen(args, close_fds=True, creationflags=spawn.flags())
+        subprocess.Popen(args, close_fds=True, env=env, creationflags=spawn.flags())
         raise SystemExit(0)
+    os.environ["PYTHONPATH"] = env["PYTHONPATH"]
     os.execv(sys.executable, args)
 
 

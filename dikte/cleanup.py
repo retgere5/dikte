@@ -18,11 +18,11 @@ import shutil
 import subprocess
 import tempfile
 
-import api
-import assistant
-import ggml
-import spawn
-from i18n import t
+from . import api
+from . import assistant
+from . import ggml
+from . import spawn
+from .i18n import t
 
 PROVIDERS = ("openrouter", "local", "claude", "codex")
 

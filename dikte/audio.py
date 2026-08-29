@@ -28,8 +28,8 @@ import wave
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-import spawn
-from i18n import t
+from . import spawn
+from .i18n import t
 
 RATE = 16000
 CHANNELS = 1

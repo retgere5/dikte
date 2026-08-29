@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from i18n import t
+from .i18n import t
 
 GITHUB_API = "https://api.github.com"
 HF_API = "https://huggingface.co/api"

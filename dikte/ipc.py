@@ -23,7 +23,7 @@ def _server_name(platform=None):
     \\\\.\\pipe namespace QLocalSocket maps this name into is machine-wide, not
     per session: the name only keeps two accounts' pipes from colliding by
     name. What actually keeps one account off another account's pipe is the
-    single-SID DACL QLocalServer's UserAccessOption applies, at dikte.py.
+    single-SID DACL QLocalServer's UserAccessOption applies, in app.py.
     """
     if (platform or sys.platform) == "win32":
         return "dikte-" + getpass.getuser()
@@ -37,15 +37,32 @@ SERVER_NAME = _server_name()
 CONNECT_MS = 800
 
 
-def script_path():
-    return os.path.realpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "dikte.py")
-    )
+def package_root():
+    """The directory the dikte package sits in, which is the checkout root.
+
+    `python -m dikte` looks for the package on the path, so this is what the
+    launchers and cli.launch_gui put on PYTHONPATH before starting one.
+    """
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def child_env():
+    """A copy of the environment with the package parent on PYTHONPATH, so a
+    child started as `python -m dikte` can import the package."""
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (package_root() + os.pathsep + existing
+                         if existing else package_root())
+    return env
 
 
 def command_for(verb):
-    """The command line a KDE shortcut runs for one of the verbs."""
-    return f"{sys.executable} {script_path()} {verb}"
+    """The command line a KDE shortcut runs for one of the verbs.
+
+    Only ever used to register a Linux desktop shortcut, so it names the
+    package parent on PYTHONPATH and launches the package with -m.
+    """
+    return f"env PYTHONPATH={package_root()} {sys.executable} -m dikte {verb}"
 
 
 def send(cmd, wait=False, timeout=0, **args):

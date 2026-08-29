@@ -15,7 +15,7 @@ die()  { printf '  \033[31m✗\033[0m %s\n' "$1"; echo; exit 1; }
 # from and the one place that is the same on KDE and on GNOME.
 setting() {
   [[ -n "$PY" ]] || return 0
-  "$PY" "$DIR/dikte.py" config get "$1" 2>/dev/null || true
+  env PYTHONPATH="$DIR" "$PY" -m dikte config get "$1" 2>/dev/null || true
 }
 
 echo
@@ -87,8 +87,8 @@ cancel_shortcut="$(setting cancel_shortcut)"
 
 # 5. The running instance ---------------------------------------------------
 # It is still running the code from before the pull.
-if pgrep -u "$USER_NAME" -f 'dikte\.py' >/dev/null 2>&1; then
-  if [[ -n "$PY" ]] && "$PY" "$DIR/dikte.py" restart >/dev/null 2>&1; then
+if pgrep -u "$USER_NAME" -f '[ ]-m dikte' >/dev/null 2>&1; then
+  if [[ -n "$PY" ]] && env PYTHONPATH="$DIR" "$PY" -m dikte restart >/dev/null 2>&1; then
     ok "Restarted, so the new version is the one running"
   else
     warn "Could not restart it; use the tray menu → Restart"

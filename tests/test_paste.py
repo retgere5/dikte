@@ -26,8 +26,8 @@ import unittest
 from typing import ClassVar
 from unittest import mock
 
-import i18n
-import paste
+from dikte import i18n
+from dikte import paste
 from tests.support import DikteTest, FakeCompleted, only_these_tools
 
 

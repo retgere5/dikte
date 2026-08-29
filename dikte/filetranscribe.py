@@ -23,11 +23,11 @@ import wave
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-import api
-import cleanup
-import ggml
-import spawn
-from i18n import t
+from . import api
+from . import cleanup
+from . import ggml
+from . import spawn
+from .i18n import t
 
 UPLOAD_LIMIT = 24 * 1024 * 1024  # the APIs take 25 MB; leave the form its room
 MP3_BITRATE = "48k"          # mono speech at 16 kHz: whisper hears nothing less

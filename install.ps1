@@ -101,7 +101,8 @@ if (-not (Test-Path $pythonw)) { $pythonw = $py.Source }
 # while this script still prints [ok].
 @"
 @echo off
-"$($py.Source)" "$Dir\dikte.py" %*
+set "PYTHONPATH=$Dir;%PYTHONPATH%"
+"$($py.Source)" -m dikte %*
 "@ | Out-File -Encoding oem (Join-Path $BinDir "dikte.cmd")
 
 # Smoke-run the shim once before trusting it: "shortcut status --json" is a
@@ -137,7 +138,7 @@ $Startup = [Environment]::GetFolderPath("Startup")
 foreach ($where in @($Programs, $Startup)) {
     $lnk = $Shell.CreateShortcut((Join-Path $where "Dikte.lnk"))
     $lnk.TargetPath = $pythonw
-    $lnk.Arguments = "`"$Dir\dikte.py`""
+    $lnk.Arguments = "-m dikte"
     $lnk.WorkingDirectory = $Dir
     $lnk.Description = "Voice dictation: record, transcribe, clean up, paste"
     $lnk.Save()
@@ -147,6 +148,9 @@ Ok "Start menu entry and autostart added"
 # 4. Global shortcuts -------------------------------------------------------
 # Dikte holds these itself through RegisterHotKey while it runs; installing
 # only writes the combination into the settings, where the listener reads it.
+# The checkout is the package parent, so put it on PYTHONPATH for the -m dikte
+# calls below to import the package.
+if ($env:PYTHONPATH) { $env:PYTHONPATH = "$Dir;$env:PYTHONPATH" } else { $env:PYTHONPATH = $Dir }
 if ($Shortcut -eq $CancelShortcut) {
     Warn "Both arguments are $Shortcut, so the discard key was left out."
     $CancelShortcut = ""
@@ -157,14 +161,14 @@ if ($Shortcut -eq $CancelShortcut) {
 # combination is already used elsewhere, and --force was not passed) is not
 # fatal: the app still runs, just without that shortcut until it is set from
 # Settings or the command printed below.
-& python "$Dir\dikte.py" shortcut install toggle --combo $Shortcut | Out-Null
+& python -m dikte shortcut install toggle --combo $Shortcut | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Ok "Start and stop: $Shortcut"
 } else {
     Warn "Could not register $Shortcut. Run 'dikte shortcut install toggle --combo `"$Shortcut`" --force' or pick a different combination."
 }
 if ($CancelShortcut) {
-    & python "$Dir\dikte.py" shortcut install cancel --combo $CancelShortcut | Out-Null
+    & python -m dikte shortcut install cancel --combo $CancelShortcut | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Ok "Discard the recording: $CancelShortcut"
     } else {

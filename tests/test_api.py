@@ -18,8 +18,8 @@ import time
 import unittest
 from unittest import mock
 
-import api
-import ggml
+from dikte import api
+from dikte import ggml
 from tests.support import (
     DikteTest,
     fake_urlopen,

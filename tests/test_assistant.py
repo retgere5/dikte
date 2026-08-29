@@ -15,8 +15,8 @@ import time
 import unittest
 from unittest import mock
 
-import assistant
-import spawn
+from dikte import assistant
+from dikte import spawn
 from tests.support import DikteTest, fake_urlopen, only_these_tools
 
 

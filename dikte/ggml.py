@@ -46,9 +46,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
-import hub
-import spawn
-from i18n import t
+from . import hub
+from . import spawn
+from .i18n import t
 
 HOST = "127.0.0.1"
 # The path api.py asks for, so its URL and the server's line up.

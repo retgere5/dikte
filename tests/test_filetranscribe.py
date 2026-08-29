@@ -14,9 +14,9 @@ import unittest
 import wave
 from unittest import mock
 
-import api
-import filetranscribe as ft
-import spawn
+from dikte import api
+from dikte import filetranscribe as ft
+from dikte import spawn
 from tests.support import DikteTest, make_wav, silence, tone
 
 

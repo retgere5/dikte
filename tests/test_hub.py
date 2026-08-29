@@ -6,7 +6,7 @@ import pathlib
 import unittest
 from unittest import mock
 
-import hub
+from dikte import hub
 from tests.support import DikteTest, fake_urlopen, http_error, url_error
 
 RELEASE = {

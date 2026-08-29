@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-import ipc
+from dikte import ipc
 
 
 class FakeSocket:
@@ -57,13 +57,16 @@ class FakeSocket:
 
 
 class Paths(unittest.TestCase):
-    def test_script_path_points_at_dikte(self):
-        self.assertTrue(ipc.script_path().endswith("dikte.py"))
-        self.assertTrue(os.path.exists(ipc.script_path()))
+    def test_package_root_holds_the_package(self):
+        root = ipc.package_root()
+        self.assertTrue(os.path.isdir(root))
+        self.assertTrue(os.path.exists(os.path.join(root, "dikte", "__init__.py")))
 
-    def test_the_shortcut_command_runs_it_with_this_interpreter(self):
+    def test_the_shortcut_command_launches_the_package(self):
         command = ipc.command_for("toggle")
-        self.assertTrue(command.startswith(sys.executable))
+        self.assertIn(sys.executable, command)
+        self.assertIn(ipc.package_root(), command)
+        self.assertIn("-m dikte", command)
         self.assertTrue(command.endswith(" toggle"))
 
     @unittest.skipUnless(hasattr(os, "getuid"),

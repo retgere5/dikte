@@ -73,8 +73,14 @@ fi
 
 # 3. Launchers -------------------------------------------------------------
 mkdir -p "$BIN_DIR" "$APP_DIR" "$AUTOSTART_DIR"
-ln -sf "$DIR/dikte.py" "$BIN_DIR/dikte"
-chmod +x "$DIR/dikte.py"
+# A wrapper rather than a symlink: the app is a package now, launched with -m,
+# which needs the checkout on PYTHONPATH. It runs from the caller's directory,
+# so a relative file argument to `dikte transcribe` still resolves.
+cat > "$BIN_DIR/dikte" <<EOF
+#!/bin/sh
+exec env PYTHONPATH="$DIR\${PYTHONPATH:+:\$PYTHONPATH}" python3 -m dikte "\$@"
+EOF
+chmod +x "$BIN_DIR/dikte"
 ok "Command installed: $BIN_DIR/dikte"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -86,7 +92,7 @@ cat > "$APP_DIR/dikte.desktop" <<EOF
 Type=Application
 Name=Dikte
 Comment=Voice dictation: record, transcribe, clean up, paste
-Exec=$PY $DIR/dikte.py
+Exec=env PYTHONPATH=$DIR $PY -m dikte
 Icon=audio-input-microphone
 Categories=Utility;AudioVideo;
 StartupNotify=false
@@ -97,7 +103,7 @@ cat > "$AUTOSTART_DIR/dikte.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Dikte
-Exec=$PY $DIR/dikte.py
+Exec=env PYTHONPATH=$DIR $PY -m dikte
 Icon=audio-input-microphone
 X-GNOME-Autostart-enabled=true
 StartupNotify=false
@@ -120,7 +126,7 @@ if [[ "$SHORTCUT" == "$CANCEL_SHORTCUT" ]]; then
 fi
 
 register() {   # which  combination  label
-  if out="$("$PY" "$DIR/dikte.py" shortcut install "$1" --combo "$2" 2>&1)"; then
+  if out="$(env PYTHONPATH="$DIR" "$PY" -m dikte shortcut install "$1" --combo "$2" 2>&1)"; then
     ok "$3: $2"
   else
     # One line: the rest of what it has to say about KWin is printed below.

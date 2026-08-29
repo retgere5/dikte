@@ -5,6 +5,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# The checkout is the package parent, so the -m dikte call below can import it.
+if ($env:PYTHONPATH) { $env:PYTHONPATH = "$Dir;$env:PYTHONPATH" } else { $env:PYTHONPATH = $Dir }
 
 function Say($m)  { Write-Host "  $m" }
 function Ok($m)   { Write-Host "  [ok] $m" -ForegroundColor Green }
@@ -96,7 +98,7 @@ $StartupLnk = Join-Path ([Environment]::GetFolderPath("Startup")) "Dikte.lnk"
 # and leaves it no longer holding the keys once this script is done.
 $py = Get-Command python -ErrorAction SilentlyContinue
 if ($py) {
-    # "quit" is one of dikte.py's idempotent verbs: asking a not-running
+    # "quit" is one of dikte's idempotent verbs: asking a not-running
     # instance to quit is itself a success (exit 0, {"ok": true, "running":
     # false}), the same as asking a running one (exit 0, {"ok": true}, no
     # "running" key) - so the exit code alone cannot tell the two apart, and
@@ -104,7 +106,7 @@ if ($py) {
     # captured, not stderr: redirecting a native command's stderr under
     # $ErrorActionPreference = "Stop" wraps each line in a terminating
     # NativeCommandError (the same hazard install.ps1's PyQt6 check had).
-    $replyText = & python (Join-Path $Dir "dikte.py") quit --json
+    $replyText = & python -m dikte quit --json
     if ($LASTEXITCODE -eq 0) {
         $reply = $null
         try { $reply = $replyText | ConvertFrom-Json } catch {}

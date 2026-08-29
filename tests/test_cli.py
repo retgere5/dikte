@@ -13,12 +13,12 @@ import sys
 import unittest
 from unittest import mock
 
-import cli
-import config as cfg
-import dikte
-import hotkey
-import ipc
-import spawn
+from dikte import app
+from dikte import cli
+from dikte import config as cfg
+from dikte import hotkey
+from dikte import ipc
+from dikte import spawn
 from tests.support import DikteTest, fake_urlopen
 
 
@@ -557,11 +557,11 @@ class WindowsRestart(DikteTest):
     def test_restart_spawns_rather_than_execs_on_windows(self):
         fake = mock.Mock(settings_window=None)
         with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch.object(dikte.subprocess, "Popen") as popen, \
-                mock.patch.object(dikte.QLocalServer, "removeServer"), \
+                mock.patch.object(app.subprocess, "Popen") as popen, \
+                mock.patch.object(app.QLocalServer, "removeServer"), \
                 self.assertRaises(AssertionError):
             expected_flags = spawn.flags()
-            dikte.Dikte.restart(fake)
+            app.Dikte.restart(fake)
         args = popen.call_args.args[0]
         self.assertEqual(args[0], sys.executable)
         self.assertIn("--gui", args)

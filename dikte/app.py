@@ -3,7 +3,7 @@
 
 This is the application: the tray icon, the state machine, and the socket the
 terminal talks to. Every verb it answers is in cli.py, which is also what runs
-`dikte.py --help`; the only argument handled here is --gui, which is how the
+`dikte --help`; the only argument handled here is --gui, which is how the
 command line says "there is no instance to talk to, so be one".
 """
 
@@ -45,21 +45,21 @@ from PyQt6.QtGui import QAction, QIcon  # noqa: E402
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon  # noqa: E402
 
-import assistant  # noqa: E402
-import audio  # noqa: E402
-import cli  # noqa: E402
-import config as cfg  # noqa: E402
-import ggml  # noqa: E402
-import hotkey  # noqa: E402
-import i18n  # noqa: E402
-import ipc  # noqa: E402
-import meeting  # noqa: E402
-import spawn  # noqa: E402
-from i18n import t  # noqa: E402
-from meeting import MeetingPipeline  # noqa: E402
-from overlay import Overlay  # noqa: E402
-from settings_ui import SettingsWindow  # noqa: E402
-from worker import Pipeline  # noqa: E402
+from . import assistant  # noqa: E402
+from . import audio  # noqa: E402
+from . import cli  # noqa: E402
+from . import config as cfg  # noqa: E402
+from . import ggml  # noqa: E402
+from . import hotkey  # noqa: E402
+from . import i18n  # noqa: E402
+from . import ipc  # noqa: E402
+from . import meeting  # noqa: E402
+from . import spawn  # noqa: E402
+from .i18n import t  # noqa: E402
+from .meeting import MeetingPipeline  # noqa: E402
+from .overlay import Overlay  # noqa: E402
+from .settings_ui import SettingsWindow  # noqa: E402
+from .worker import Pipeline  # noqa: E402
 
 SERVER_NAME = ipc.SERVER_NAME
 IDLE, RECORDING, BUSY = "idle", "recording", "busy"
@@ -893,15 +893,18 @@ class Dikte:
             self.settings_window.close()
         self.shutdown()
         QLocalServer.removeServer(SERVER_NAME)
+        args = [sys.executable, "-m", "dikte", "--gui"]
+        env = ipc.child_env()
         if sys.platform == "win32":
             # exec does not replace a process on Windows, so a fresh process
             # (sharing this one's console and standard handles, same as
             # cli.launch_gui; neither call detaches it) plus a plain exit here
             # lands in the same place.
-            subprocess.Popen([sys.executable, ipc.script_path(), "--gui"],
-                             close_fds=True, creationflags=spawn.flags())
+            subprocess.Popen(args, close_fds=True, env=env,
+                             creationflags=spawn.flags())
             os._exit(0)
-        os.execv(sys.executable, [sys.executable, ipc.script_path(), "--gui"])
+        os.environ["PYTHONPATH"] = env["PYTHONPATH"]
+        os.execv(sys.executable, args)
 
     def shutdown(self):
         self._quitting = True
@@ -1055,7 +1058,3 @@ def run_app(args):
         QTimer.singleShot(0, dikte.toggle_meeting)
 
     return app.exec()
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -66,7 +66,7 @@ echo "──────────────────"
 # whether they went into KDE's kglobalshortcutsrc or GNOME's gsettings.
 if [[ -n "$PY" ]] && python3 -c 'import PyQt6.QtWidgets' 2>/dev/null; then
   for which in toggle cancel ask meeting; do
-    "$PY" "$DIR/dikte.py" shortcut remove "$which" >/dev/null 2>&1 || true
+    env PYTHONPATH="$DIR" "$PY" -m dikte shortcut remove "$which" >/dev/null 2>&1 || true
   done
   ok "Global shortcuts unregistered"
   say "KWin reads that file at startup, so the keys are free after your next login."
@@ -78,10 +78,10 @@ fi
 # 2. The running instance --------------------------------------------------
 # It holds a tray icon and a socket; asking it to quit is tidier than pulling
 # its launchers out from under it.
-if pgrep -u "$USER_NAME" -f 'dikte\.py' >/dev/null 2>&1; then
-  [[ -n "$PY" ]] && "$PY" "$DIR/dikte.py" quit >/dev/null 2>&1 || true
+if pgrep -u "$USER_NAME" -f '[ ]-m dikte' >/dev/null 2>&1; then
+  [[ -n "$PY" ]] && env PYTHONPATH="$DIR" "$PY" -m dikte quit >/dev/null 2>&1 || true
   sleep 0.5
-  if pgrep -u "$USER_NAME" -f 'dikte\.py' >/dev/null 2>&1; then
+  if pgrep -u "$USER_NAME" -f '[ ]-m dikte' >/dev/null 2>&1; then
     warn "Dikte is still running; close it from the tray icon"
   else
     ok "Stopped the running instance"
@@ -89,12 +89,15 @@ if pgrep -u "$USER_NAME" -f 'dikte\.py' >/dev/null 2>&1; then
 fi
 
 # 3. Launchers -------------------------------------------------------------
-# Only our own symlink goes: a file of the same name that somebody else put
-# there is not ours to delete.
+# Only our own launcher goes: a file of the same name that somebody else put
+# there is not ours to delete. Ours is now the wrapper that runs -m dikte; an
+# install from before the package move left a symlink to the entry script.
 if [[ -L "$BIN_DIR/dikte" ]]; then
   remove "$BIN_DIR/dikte"
+elif [[ -f "$BIN_DIR/dikte" ]] && grep -q -- '-m dikte' "$BIN_DIR/dikte" 2>/dev/null; then
+  remove "$BIN_DIR/dikte"
 elif [[ -e "$BIN_DIR/dikte" ]]; then
-  warn "$BIN_DIR/dikte is not our symlink, leaving it alone"
+  warn "$BIN_DIR/dikte is not ours, leaving it alone"
 else
   gone "Was not there: $BIN_DIR/dikte"
 fi

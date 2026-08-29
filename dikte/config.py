@@ -7,11 +7,11 @@ import os
 import pathlib
 import sys
 
-import api
-import ggml
-import i18n
-import paste
-from i18n import t
+from . import api
+from . import ggml
+from . import i18n
+from . import paste
+from .i18n import t
 
 
 def _xdg(var, default):

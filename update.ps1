@@ -1,6 +1,8 @@
 # Pull the latest Dikte and put the launchers back, keeping your shortcuts.
 $ErrorActionPreference = "Stop"
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# The checkout is the package parent, so the -m dikte calls below can import it.
+if ($env:PYTHONPATH) { $env:PYTHONPATH = "$Dir;$env:PYTHONPATH" } else { $env:PYTHONPATH = $Dir }
 & git -C $Dir pull --ff-only
 # $ErrorActionPreference = "Stop" only catches cmdlet errors, not a non-zero
 # exit code from an external executable, so a failed pull (diverged history,
@@ -18,7 +20,7 @@ if ($LASTEXITCODE -ne 0) {
 # without arguments and writes its own defaults instead.
 $installArgs = @()
 try {
-    $current = & python "$Dir\dikte.py" shortcut status --json | ConvertFrom-Json
+    $current = & python -m dikte shortcut status --json | ConvertFrom-Json
     if ($current.shortcuts.toggle.configured) {
         $installArgs += "-Shortcut", $current.shortcuts.toggle.configured
     }
@@ -37,4 +39,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  [!] install.ps1 failed; not restarting into a broken install." -ForegroundColor Yellow
     exit 1
 }
-& python "$Dir\dikte.py" restart | Out-Null
+& python -m dikte restart | Out-Null

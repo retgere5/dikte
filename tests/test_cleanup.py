@@ -12,10 +12,10 @@ import sys
 import unittest
 from unittest import mock
 
-import api
-import cleanup
-import ggml
-import spawn
+from dikte import api
+from dikte import cleanup
+from dikte import ggml
+from dikte import spawn
 from tests.support import DikteTest, fake_urlopen, sent_json, url_error
 from tests.test_api import FakeServer, chat_reply
 

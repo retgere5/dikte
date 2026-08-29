@@ -19,8 +19,11 @@ from PyQt6.QtNetwork import QLocalSocket
 def _server_name(platform=None):
     """One name per user: the uid where there is one, the login name on Windows.
 
-    Windows has no getuid, and QLocalSocket maps the name to a named pipe that
-    is already per session; the user name only keeps two accounts apart.
+    Windows has no getuid, so the login name stands in for it here, but the
+    \\\\.\\pipe namespace QLocalSocket maps this name into is machine-wide, not
+    per session: the name only keeps two accounts' pipes from colliding by
+    name. What actually keeps one account off another account's pipe is the
+    single-SID DACL QLocalServer's UserAccessOption applies, at dikte.py.
     """
     if (platform or sys.platform) == "win32":
         return "dikte-" + getpass.getuser()

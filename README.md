@@ -11,6 +11,13 @@ newer, and PyQt6.
 
 *[Türkçe README](README.tr.md)*
 
+> **Windows port.** This fork adds native Windows support on top of v1.0.2: the
+> clipboard and paste through the Win32 API, the global shortcut through
+> `RegisterHotKey`, recording through ffmpeg's DirectShow input, and a
+> PowerShell installer, all as a fourth platform beside the existing Linux and
+> macOS backends. See **[README.windows.md](README.windows.md)** to get started
+> on Windows. Upstream: [yusufipk/dikte](https://github.com/yusufipk/dikte).
+
 <p align="center">
   <img src="docs/settings-general.webp" width="820" alt="Dikte settings, General tab">
 </p>

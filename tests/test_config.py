@@ -89,6 +89,9 @@ class Saving(DikteTest):
         cfg.Config().save()
         self.assertTrue(cfg.CONFIG_FILE.exists())
 
+    @unittest.skipUnless(os.name == "posix",
+                         "mode bits are a POSIX promise; Windows relies on "
+                         "the profile directory's own ACL instead")
     def test_the_file_is_readable_by_nobody_else(self):
         """It holds two API keys."""
         cfg.Config().save()
@@ -467,19 +470,25 @@ class Directories(unittest.TestCase):
         with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "/c",
                                           "XDG_DATA_HOME": "/d"}):
             config_dir, data_dir = cfg._directories("linux")
-        self.assertEqual(str(config_dir), "/c/dikte")
-        self.assertEqual(str(data_dir), "/d/dikte")
+        # pathlib.Path is WindowsPath on a Windows test runner, which joins the
+        # final component with a backslash instead of "/", failing a hardcoded
+        # forward-slash literal even though the linux production branch itself
+        # is correct; compare the platform-invariant parts instead, the way
+        # 5264a30 already does for the win32 tests below.
+        self.assertEqual(config_dir.parts[-2:], ("c", "dikte"))
+        self.assertEqual(data_dir.parts[-2:], ("d", "dikte"))
 
     def test_linux_without_the_variables_set(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             config_dir, data_dir = cfg._directories("linux")
-        self.assertTrue(str(config_dir).endswith("/.config/dikte"))
-        self.assertTrue(str(data_dir).endswith("/.local/share/dikte"))
+        self.assertEqual(config_dir.parts[-2:], (".config", "dikte"))
+        self.assertEqual(data_dir.parts[-3:], (".local", "share", "dikte"))
 
     def test_a_mac_keeps_both_in_application_support(self):
         config_dir, data_dir = cfg._directories("darwin")
         self.assertEqual(config_dir, data_dir)
-        self.assertTrue(str(config_dir).endswith("/Library/Application Support/Dikte"))
+        self.assertEqual(config_dir.parts[-3:],
+                         ("Library", "Application Support", "Dikte"))
 
     def test_a_mac_does_not_read_the_xdg_variables(self):
         """A Mac with them set from some other tool still stores in one place."""

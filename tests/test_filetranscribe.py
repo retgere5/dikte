@@ -8,6 +8,7 @@ made up a stamp nobody recorded.
 
 import contextlib
 import os
+import sys
 import time
 import unittest
 import wave
@@ -274,15 +275,27 @@ class Ffmpeg(unittest.TestCase):
     """_ffmpeg is what actually runs the converter; _to_wav and _to_mp3 both
     go through it."""
 
-    def test_it_runs_without_a_console_window(self):
-        with mock.patch.object(ft.subprocess, "Popen") as popen, \
+    def test_it_runs_without_a_console_window_on_windows(self):
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(ft.subprocess, "Popen") as popen, \
                 mock.patch.object(ft.os.path, "exists", return_value=True):
             popen.return_value.communicate.return_value = ("", "")
             popen.return_value.returncode = 0
             popen.return_value.poll.return_value = 0
             ft._ffmpeg(["-i", "in.wav"], "out.wav")
-        self.assertEqual(popen.call_args.kwargs.get("creationflags", 0),
+        self.assertEqual(popen.call_args.kwargs.get("creationflags"),
                          spawn.flags())
+        self.assertNotEqual(popen.call_args.kwargs.get("creationflags"), 0)
+
+    def test_no_console_flag_off_windows(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(ft.subprocess, "Popen") as popen, \
+                mock.patch.object(ft.os.path, "exists", return_value=True):
+            popen.return_value.communicate.return_value = ("", "")
+            popen.return_value.returncode = 0
+            popen.return_value.poll.return_value = 0
+            ft._ffmpeg(["-i", "in.wav"], "out.wav")
+        self.assertEqual(popen.call_args.kwargs.get("creationflags"), 0)
 
 
 class Transcriber(DikteTest):

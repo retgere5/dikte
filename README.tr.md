@@ -59,6 +59,23 @@ dinleyici orada mekanizmanın kendisi, dolayısıyla kurulacak bir şey de yok:
 `brew install ffmpeg`, `pip install PyQt6`, sonra `python dikte.py`. Toplantı
 için BlackHole ya da Loopback gerekiyor, hoparlörden çıkanı kimse vermiyor.
 
+Windows'ta aynı işi PowerShell görür. Kayıt ffmpeg'in dshow girişinden geçer,
+yani diktenin kendisi için de ffmpeg gerekir:
+
+    winget install Gyan.FFmpeg Python.Python.3.13
+    python -m pip install PyQt6
+    powershell -ExecutionPolicy Bypass -File install.ps1
+
+`install.ps1` `dikte` komutunu, Başlat menüsü girdisini, açılışta başlamayı
+ve iki kısayolu ekler; kısayolları Dikte çalıştığı sürece RegisterHotKey ile
+kendisi tutar ve Linux'taki dinleyicinin aksine tuşu yutar. İki sınır
+Windows'un kendisinindir: otomatik yapıştırma yönetici olarak çalışan bir
+pencereye ulaşamaz (metin yine panodadır) ve bir toplantının karşı tarafı
+loopback bir cihaz ister; sürücü sunuyorsa "Stereo Mix", sunmuyorsa VB-Cable,
+Mac'te BlackHole'un oynadığı rolün aynısı. llama.cpp için indirilen GPU
+derlemeleri Vulkan kullanır; CUDA derlemesi ayrı cudart indirmesi ister,
+o gerekiyorsa Ayarlar'ı kendi derlemenize yöneltin.
+
 `install.sh` `dikte` komutunu, menü girdisini, oturum açılışında otomatik
 başlatmayı ve iki global kısayolu kurar; tuşları da iki argümanı. `./update.sh`
 son sürümü çeker ve bunları senin seçtiğin tuşlarla yerine koyar;

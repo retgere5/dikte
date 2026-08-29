@@ -61,6 +61,23 @@ that catches the keys is the mechanism there and there is nothing to run:
 needs BlackHole or Loopback, because nothing else offers what the speakers are
 playing.
 
+On Windows, PowerShell does the same job. Recording goes through ffmpeg's
+dshow input, so ffmpeg is needed for dictation itself:
+
+    winget install Gyan.FFmpeg Python.Python.3.13
+    python -m pip install PyQt6
+    powershell -ExecutionPolicy Bypass -File install.ps1
+
+`install.ps1` adds the `dikte` command, a Start menu entry, an autostart
+entry and the two shortcuts, which Dikte holds itself through RegisterHotKey
+while it runs; unlike the Linux listener it does swallow the key. Two limits
+are Windows's own: auto-paste cannot reach a window running as administrator
+(the text is still on the clipboard), and a meeting's far side needs a
+loopback device, "Stereo Mix" where the driver offers it or VB-Cable where it
+does not, the same role BlackHole plays on a Mac. The GPU builds fetched for
+llama.cpp use Vulkan; a CUDA build wants its separate cudart download, so
+point Settings at your own binary if that is the one you need.
+
 `install.sh` adds the `dikte` command, a menu entry, an autostart entry and the
 two global shortcuts, whose keys are its two arguments. `./update.sh` pulls and
 puts all of that back, keeping the keys you chose; `./uninstall.sh` takes it away
@@ -191,6 +208,7 @@ overlay.py        the corner indicator
 settings_ui.py    settings window
 hotkey.py         KDE shortcut installation and the evdev listener
 paste.py          wl-clipboard and ydotool wrappers
+spawn.py          how a child process starts on Windows: no console, PATH resolved
 i18n.py           the string table
 ```
 

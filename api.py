@@ -246,6 +246,20 @@ def _extract_error(body):
     return body[:300]
 
 
+# mimetypes.guess_type consults the local machine's own registration (the
+# Windows registry, or /etc/mime.types on Linux), so the same .wav file gets
+# audio/wav on one machine and audio/x-wav on another; the content-type sent
+# to a transcription API should not depend on whose computer is asking. Only
+# the extension this module actually sends needs a fixed answer here, so
+# anything else keeps falling back to mimetypes.guess_type.
+_CONTENT_TYPES = {".wav": "audio/x-wav"}
+
+
+def _content_type(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return _CONTENT_TYPES.get(ext) or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+
 def _multipart(fields, file_field, file_path):
     """Build a multipart/form-data body; returns (body, content-type)."""
     boundary = "----dikte" + secrets.token_hex(16)
@@ -258,7 +272,7 @@ def _multipart(fields, file_field, file_path):
         out += str(value).encode("utf-8") + b"\r\n"
 
     filename = os.path.basename(file_path)
-    ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    ctype = _content_type(filename)
     with open(file_path, "rb") as fh:
         payload = fh.read()
     out += f"--{boundary}\r\n".encode()

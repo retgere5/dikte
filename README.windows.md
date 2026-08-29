@@ -1,5 +1,7 @@
 # Dikte on Windows
 
+*[Türkçe](README.windows.tr.md)*
+
 Dikte runs natively on Windows 10 and 11. Recording goes through ffmpeg's
 DirectShow input, the clipboard and paste use the Win32 API directly, and the
 global shortcut is registered with `RegisterHotKey`, so there is nothing to

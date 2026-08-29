@@ -10,6 +10,13 @@ paketleri dışında bağımlılığı yok: sadece Python standart kütüphanesi
 
 *[English README](README.md)*
 
+> **Windows portu.** Bu fork, v1.0.2 üstüne doğal Windows desteği ekler: pano ve
+> yapıştırma Win32 API ile, global kısayol `RegisterHotKey` ile, kayıt ffmpeg'in
+> DirectShow girişiyle, üstüne bir PowerShell kurulumu; hepsi mevcut Linux ve
+> macOS backend'lerinin yanında dördüncü platform olarak. Windows'ta başlamak
+> için **[README.windows.tr.md](README.windows.tr.md)**. Upstream:
+> [yusufipk/dikte](https://github.com/yusufipk/dikte).
+
 <p align="center">
   <img src="docs/settings-general.webp" width="820" alt="Dikte ayarları, Genel sekmesi">
 </p>

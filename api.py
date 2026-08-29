@@ -12,12 +12,14 @@ is up, which is the one thing this module has to fill in for it.
 
 import collections
 import contextlib
+import ctypes
 import http.client
 import json
 import mimetypes
 import os
 import secrets
 import socket
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -148,8 +150,27 @@ def _stop_using(conn):
     if sock is not None:
         with contextlib.suppress(OSError):
             sock.shutdown(socket.SHUT_RDWR)
+        if sys.platform == "win32":
+            _force_close(sock)
     with contextlib.suppress(OSError):
         conn.close()
+
+
+def _force_close(sock):
+    """Make sure `sock` is really closed, blocked reader or not.
+
+    Winsock, unlike POSIX, does not wake a thread blocked in recv() when
+    shutdown() runs on the same socket from another thread; the read only
+    returns once the other side eventually sends something or drops the
+    connection. Closing the socket the normal way does not help either: the
+    response reading it still holds a file object open on it, and
+    socket.close() only decrements that refcount instead of releasing the
+    handle while any reference remains. Calling WinSock's own closesocket()
+    on the raw handle skips both of those and drops the connection outright,
+    which is what actually unblocks the read.
+    """
+    with contextlib.suppress(OSError):
+        ctypes.WinDLL("ws2_32", use_last_error=True).closesocket(sock.fileno())
 
 
 class _TrackedHTTP(urllib.request.HTTPHandler):

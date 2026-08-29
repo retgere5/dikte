@@ -5,7 +5,8 @@ to be told about it, and something has to be listening. On Linux that is the
 desktop's shortcut registry (KDE's file, GNOME's gsettings) and a reader of
 /dev/input for the wait until the registry is live. macOS has no registry to
 write into: the application asks Carbon for the combination while it runs, so
-there the listener is not a fallback but the whole mechanism.
+there the listener is not a fallback but the whole mechanism. Windows has no
+registry either: RegisterHotKey is the whole mechanism there too, like Carbon.
 """
 
 import ast

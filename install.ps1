@@ -74,11 +74,25 @@ if ($Shortcut -eq $CancelShortcut) {
     Warn "Both arguments are $Shortcut, so the discard key was left out."
     $CancelShortcut = ""
 }
+# $ErrorActionPreference = "Stop" does not catch a non-zero exit code from an
+# external executable (only from cmdlets), so each call is checked against
+# $LASTEXITCODE the same way the pip-install step above is. A conflict (the
+# combination is already used elsewhere, and --force was not passed) is not
+# fatal: the app still runs, just without that shortcut until it is set from
+# Settings or the command printed below.
 & python "$Dir\dikte.py" shortcut install toggle --combo $Shortcut | Out-Null
-Ok "Start and stop: $Shortcut"
+if ($LASTEXITCODE -eq 0) {
+    Ok "Start and stop: $Shortcut"
+} else {
+    Warn "Could not register $Shortcut. Run 'dikte shortcut install toggle --combo `"$Shortcut`" --force' or pick a different combination."
+}
 if ($CancelShortcut) {
     & python "$Dir\dikte.py" shortcut install cancel --combo $CancelShortcut | Out-Null
-    Ok "Discard the recording: $CancelShortcut"
+    if ($LASTEXITCODE -eq 0) {
+        Ok "Discard the recording: $CancelShortcut"
+    } else {
+        Warn "Could not register $CancelShortcut. Run 'dikte shortcut install cancel --combo `"$CancelShortcut`" --force' or pick a different combination."
+    }
 }
 
 Write-Host ""

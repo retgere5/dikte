@@ -48,6 +48,14 @@ class OnMacOS:
         self.enterContext(mock.patch.object(sys, "platform", "darwin"))
 
 
+class OnWindows:
+    """A test that runs as if the machine recorded through dshow."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(sys, "platform", "win32"))
+
+
 class ChunkLevels(unittest.TestCase):
     def test_silence(self):
         self.assertEqual(audio.chunk_levels(silence(0.1)), (0.0, 0.0))
@@ -540,23 +548,33 @@ class MeetingCommand(unittest.TestCase):
         self.assertIn(":1", cmd)
         self.assertIn(":them", cmd)
 
+    def test_windows_reads_both_through_dshow(self):
+        cmd = self.command("win32", mic="mine")
+        self.assertEqual(cmd.count("dshow"), 2)
+        self.assertIn("audio=mine", cmd)
+        self.assertIn("audio=them", cmd)
+
     def test_no_microphone_named_means_the_default_one(self):
         self.assertIn("default", self.command("linux"))
         self.assertIn(":default", self.command("darwin"))
 
     def test_both_merge_the_two_into_one_stereo_stream(self):
-        for platform in ("linux", "darwin"):
+        for platform in ("linux", "darwin", "win32"):
             with self.subTest(platform=platform):
-                cmd = self.command(platform)
+                cmd = self.command(platform, mic="mine")
                 self.assertIn(audio.MERGE_FILTER, cmd)
                 self.assertEqual(cmd[cmd.index("-map") + 1], "[out]")
                 self.assertEqual(cmd[cmd.index("-f", cmd.index("-map")) + 1], "s16le")
 
-    def test_neither_lets_ffmpeg_read_the_terminal(self):
-        """It shares stdin with Dikte, and would eat a keypress meant for it."""
-        for platform in ("linux", "darwin"):
+    def test_stdin_is_reserved_only_where_it_is_needed_to_stop_the_recording(self):
+        """Linux and macOS end the recording with SIGINT and would have a
+        stray keypress meant for it stolen away; Windows ends it by writing
+        "q" to the child's own stdin, so -nostdin cannot be there."""
+        for platform, wants_nostdin in (("linux", True), ("darwin", True),
+                                        ("win32", False)):
             with self.subTest(platform=platform):
-                self.assertIn("-nostdin", self.command(platform))
+                cmd = self.command(platform, mic="mine")
+                self.assertEqual("-nostdin" in cmd, wants_nostdin)
 
 
 class MacDevices(OnMacOS, DikteTest):
@@ -662,58 +680,100 @@ class MacRecordingCommand(OnMacOS, DikteTest):
         self.assertFalse(recorder.active)
 
 
-DSHOW_LISTING = """\
-[dshow @ 000001] "Mikrofon (Realtek(R) Audio)" (audio)
-[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\\wave_{GUID-1}"
-[dshow @ 000001] "Stereo Karisimi (Realtek(R) Audio)" (audio)
-[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\\wave_{GUID-2}"
-[dshow @ 000001] "OBS Virtual Camera" (video)
-[dshow @ 000001]   Alternative name "@device_pnp_{GUID-3}"
-"""
+DSHOW_LISTING = (
+    '[dshow @ 000001] "Mikrofon (Realtek(R) Audio)" (audio)\n'
+    '[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\\wave_{GUID-1}"\n'
+    # The real Realtek driver on Turkish Windows calls this "Stereo Karışımı",
+    # cased however the driver's string table happens to case it; dshow has
+    # been seen to hand it back in full capitals, where the dotless "ı" comes
+    # out looking exactly like a plain "I" always does.
+    '[dshow @ 000001] "STEREO KARIŞIMI (Realtek(R) Audio)" (audio)\n'
+    '[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\\wave_{GUID-2}"\n'
+    # A name ffmpeg could not decode cleanly comes back with the replacement
+    # character in it; parsing must not choke on that, and it must not be
+    # mistaken for the loopback device either.
+    '[dshow @ 000001] "USB Kulakl�k Mikrofonu" (audio)\n'
+    '[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\\wave_{GUID-3}"\n'
+    '[dshow @ 000001] "OBS Virtual Camera" (video)\n'
+    '[dshow @ 000001]   Alternative name "@device_pnp_{GUID-3}"\n'
+)
 
 
-class DshowDevices(DikteTest):
+class WindowsDevices(OnWindows, DikteTest):
+    """The one dshow listing all three device questions are answered from,
+    reached through the same public functions MacDevices uses, so a swapped
+    Sound field fails here instead of only inside the private dshow helpers.
+    """
 
-    def listing(self, stderr=DSHOW_LISTING):
-        return mock.patch.object(
-            audio.subprocess, "run",
-            return_value=FakeCompleted(returncode=1, stderr=stderr))
+    @contextlib.contextmanager
+    def listing(self, stderr=DSHOW_LISTING, tools=("ffmpeg",)):
+        completed = FakeCompleted(returncode=1, stderr=stderr)
+        with only_these_tools(*tools), \
+                mock.patch.object(subprocess, "run", return_value=completed):
+            yield
 
-    def test_audio_devices_come_back_with_monikers(self):
-        with only_these_tools("ffmpeg"), self.listing():
-            self.assertEqual(audio._dshow_devices(), [
+    def test_audio_devices_come_back_with_monikers_and_video_left_out(self):
+        with self.listing():
+            self.assertEqual(audio.list_sources(), [
                 ("@device_cm_{33D9A762}\\wave_{GUID-1}",
                  "Mikrofon (Realtek(R) Audio)"),
                 ("@device_cm_{33D9A762}\\wave_{GUID-2}",
-                 "Stereo Karisimi (Realtek(R) Audio)"),
+                 "STEREO KARIŞIMI (Realtek(R) Audio)"),
+                ("@device_cm_{33D9A762}\\wave_{GUID-3}",
+                 "USB Kulakl�k Mikrofonu"),
             ])
 
-    def test_video_devices_are_left_out(self):
-        with only_these_tools("ffmpeg"), self.listing():
-            names = [name for _, name in audio._dshow_devices()]
-        self.assertNotIn("OBS Virtual Camera", names)
+    def test_the_far_side_of_a_meeting_is_offered_the_same_devices(self):
+        """Windows calls none of them an output either, the same compromise
+        as macOS, so the loopback one is in here too."""
+        with self.listing():
+            self.assertEqual(audio.list_monitors(), audio.list_sources())
 
-    def test_no_ffmpeg_means_no_devices(self):
-        with only_these_tools():
-            self.assertEqual(audio._dshow_devices(), [])
-
-    def test_the_far_side_defaults_to_a_loopback_looking_device(self):
-        with only_these_tools("ffmpeg"), self.listing():
-            self.assertEqual(audio._dshow_default_output(),
+    def test_the_turkish_loopback_device_is_picked_out_by_name(self):
+        """"Stereo Karışımı" reported in full capitals lower-cases to
+        neither the plain-ASCII spelling nor the properly-cased one; the
+        match has to fold the Turkish "i" and "ş" pairs to find it anyway."""
+        with self.listing():
+            self.assertEqual(audio.default_monitor(),
                              "@device_cm_{33D9A762}\\wave_{GUID-2}")
 
     def test_no_loopback_device_means_no_default(self):
         head = DSHOW_LISTING.splitlines()[:2]
+        with self.listing("\n".join(head) + "\n"):
+            self.assertEqual(audio.default_monitor(), "")
+
+    def test_the_other_loopback_devices_people_install(self):
+        for name in ("Stereo Mix (Realtek(R) Audio)",
+                     "CABLE Output (VB-Audio Virtual Cable)",
+                     "virtual-audio-capturer"):
+            with self.subTest(name=name):
+                listing = (
+                    '[dshow @ 1] "Mikrofon" (audio)\n'
+                    '[dshow @ 1]   Alternative name "@device_cm_{1}\\wave_{1}"\n'
+                    f'[dshow @ 1] "{name}" (audio)\n'
+                    '[dshow @ 1]   Alternative name "@device_cm_{1}\\wave_{2}"\n'
+                )
+                with self.listing(stderr=listing):
+                    self.assertEqual(audio.default_monitor(),
+                                     "@device_cm_{1}\\wave_{2}")
+
+    def test_no_ffmpeg_installed(self):
+        with only_these_tools():
+            self.assertEqual(audio.list_sources(), [])
+            self.assertEqual(audio.list_monitors(), [])
+            self.assertEqual(audio.default_monitor(), "")
+
+    def test_an_ffmpeg_that_will_not_run(self):
         with only_these_tools("ffmpeg"), \
-                self.listing("\n".join(head) + "\n"):
-            self.assertEqual(audio._dshow_default_output(), "")
+                mock.patch.object(subprocess, "run", side_effect=OSError("nope")):
+            self.assertEqual(audio.list_sources(), [])
 
 
-class DshowCommands(DikteTest):
+class WindowsRecordingCommand(OnWindows, DikteTest):
 
     def test_the_recording_command_streams_raw_pcm(self):
         with only_these_tools("ffmpeg"):
-            cmd = audio._dshow_record("@device_x")
+            cmd = audio.recording_command("@device_x")
         self.assertEqual(cmd[0], "ffmpeg")
         self.assertIn("dshow", cmd)
         self.assertIn("audio=@device_x", cmd)
@@ -726,16 +786,20 @@ class DshowCommands(DikteTest):
         with only_these_tools("ffmpeg"), \
                 mock.patch.object(audio, "_dshow_devices",
                                   return_value=[("@dev1", "Mic")]):
-            self.assertIn("audio=@dev1", audio._dshow_record(""))
+            self.assertIn("audio=@dev1", audio.recording_command(""))
 
     def test_no_devices_at_all_means_no_command(self):
         with only_these_tools("ffmpeg"), \
                 mock.patch.object(audio, "_dshow_devices", return_value=[]):
-            self.assertEqual(audio._dshow_record(""), [])
+            self.assertEqual(audio.recording_command(""), [])
+
+    def test_no_ffmpeg_installed(self):
+        with only_these_tools():
+            self.assertEqual(audio.recording_command(), [])
 
     def test_the_meeting_command_reads_both_devices(self):
         with only_these_tools("ffmpeg"):
-            cmd = audio._dshow_meeting("@mic", "@far")
+            cmd = audio.meeting_command("@mic", "@far")
         self.assertIn("audio=@mic", cmd)
         self.assertIn("audio=@far", cmd)
         self.assertIn(audio.MERGE_FILTER, cmd)

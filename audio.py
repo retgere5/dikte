@@ -7,9 +7,9 @@ of a single stream, which is the only way the two stay aligned with each other
 over an hour.
 
 Which programs do the capturing is a property of the machine, not of the code
-above: PulseAudio or PipeWire on Linux, AVFoundation through ffmpeg on macOS.
-They are gathered into one group each near the bottom of this file, and a
-chooser picks between them.
+above: PulseAudio or PipeWire on Linux, AVFoundation through ffmpeg on macOS,
+dshow through ffmpeg on Windows. They are gathered into one group each near
+the bottom of this file, and a chooser picks between them.
 """
 
 import array
@@ -634,9 +634,31 @@ def _avfoundation_default_output():
 # Windows offers no monitor of the speakers through dshow either: recording
 # the far side of a meeting needs a device that plays it back as an input.
 # "Stereo Mix" is the driver's own, VB-Cable and virtual-audio-capturer are
-# the two people install.
-WINDOWS_LOOPBACK = ("stereo mix", "stereo karisimi", "stereo karışımı",
-                    "cable output", "virtual-audio")
+# the two people install. On Turkish Windows the driver's own device is
+# "Stereo Karışımı"; matching it goes through _fold_turkish_i below, so one
+# plain-ASCII spelling here is enough for however dshow happens to case it.
+WINDOWS_LOOPBACK = ("stereo mix", "stereo karisimi", "cable output",
+                    "virtual-audio")
+
+
+def _fold_turkish_i(name):
+    """A device name folded so a Turkish "i" matches regardless of how dshow
+    capitalized it.
+
+    Python's str.lower() has no notion of Turkish casing: a plain "I" always
+    becomes a dotted "i", never the dotless "ı" the same word uses in
+    Turkish. So "Stereo Karışımı" (the driver's own casing) lower-cases to
+    "stereo karışımı", but a copy of the same name reported in full capitals
+    lower-cases to "stereo karişimi" instead, the ordinary lower() detour a
+    dotless capital "I" takes when it started out looking exactly like a
+    dotted one, plus "ş" left untouched at "s"'s position, matching neither
+    that name nor the plain-ASCII "stereo karisimi" already listed above.
+    Flattening the "ı"/"İ" pair to "i" and the "ş"/"Ş" pair to "s" before
+    comparing removes the ambiguity instead of enumerating every casing
+    dshow might hand back.
+    """
+    return (name.replace("İ", "i").replace("ı", "i")
+                .replace("Ş", "s").replace("ş", "s").lower())
 
 
 def _dshow_devices():
@@ -708,7 +730,8 @@ def _dshow_meeting(mic_target, system_target):
 
 def _dshow_default_output():
     for moniker, name in _dshow_devices():
-        if any(word in name.lower() for word in WINDOWS_LOOPBACK):
+        folded = _fold_turkish_i(name)
+        if any(word in folded for word in WINDOWS_LOOPBACK):
             return moniker
     return ""
 

@@ -166,14 +166,16 @@ def download(item, target, on_progress=None, should_stop=None, require_hash=True
     request = urllib.request.Request(item.url, headers={"User-Agent": hub.USER_AGENT})
     digest = hashlib.sha256()
     done = 0
+    stopped = False
+    overlong = False
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             total = int(response.headers.get("Content-Length") or item.size or 0)
             with open(part, "wb") as out:
                 while True:
                     if should_stop is not None and should_stop():
-                        part.unlink(missing_ok=True)
-                        return False
+                        stopped = True
+                        break
                     block = response.read(DOWNLOAD_CHUNK)
                     if not block:
                         break
@@ -183,11 +185,23 @@ def download(item, target, on_progress=None, should_stop=None, require_hash=True
                     # More than was announced: a body that does not end is the
                     # one way this loop could run until the disk is full.
                     if total and done > total:
-                        part.unlink(missing_ok=True)
-                        raise LocalError(t("{name} is longer than it said it "
-                                           "would be.", name=item.name))
+                        overlong = True
+                        break
                     if on_progress is not None:
                         on_progress(done, total)
+        # Both branches above only set a flag and break, rather than unlinking
+        # `part` right there: it is still open for writing at that point, and
+        # deleting it while a handle is still open fails outright on Windows,
+        # unlike POSIX, which allows it. Acting on the flags here instead, once
+        # the `with` above has closed the file, keeps this one function
+        # correct on both.
+        if stopped:
+            part.unlink(missing_ok=True)
+            return False
+        if overlong:
+            part.unlink(missing_ok=True)
+            raise LocalError(t("{name} is longer than it said it "
+                               "would be.", name=item.name))
         # A proxy notice or an error page that came back as 200 would otherwise
         # be renamed into place and only fail when something tries to read it.
         if total and done != total:

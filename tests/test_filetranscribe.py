@@ -283,9 +283,9 @@ class Ffmpeg(unittest.TestCase):
             popen.return_value.returncode = 0
             popen.return_value.poll.return_value = 0
             ft._ffmpeg(["-i", "in.wav"], "out.wav")
-        self.assertEqual(popen.call_args.kwargs.get("creationflags"),
-                         spawn.flags())
-        self.assertNotEqual(popen.call_args.kwargs.get("creationflags"), 0)
+            self.assertEqual(popen.call_args.kwargs.get("creationflags"),
+                             spawn.flags())
+            self.assertNotEqual(popen.call_args.kwargs.get("creationflags"), 0)
 
     def test_no_console_flag_off_windows(self):
         with mock.patch.object(sys, "platform", "linux"), \

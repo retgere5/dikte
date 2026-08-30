@@ -225,8 +225,8 @@ class Output(DikteTest):
                 mock.patch.object(subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess(["claude"], 0, "done", "")
             cleanup._output(["claude", "-p"], 180, "Claude")
-        self.assertEqual(run.call_args.kwargs.get("creationflags"), spawn.flags())
-        self.assertNotEqual(run.call_args.kwargs.get("creationflags"), 0)
+            self.assertEqual(run.call_args.kwargs.get("creationflags"), spawn.flags())
+            self.assertNotEqual(run.call_args.kwargs.get("creationflags"), 0)
 
     def test_no_console_flag_off_windows(self):
         with mock.patch.object(sys, "platform", "linux"), \

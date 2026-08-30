@@ -24,6 +24,7 @@ from unittest import mock
 
 from dikte import assistant
 from dikte import config as cfg
+from dikte import ggml
 from dikte import i18n
 
 # What the application is, rather than what it does: PipeWire, wl-clipboard,
@@ -84,6 +85,14 @@ class DikteTest(unittest.TestCase):
         # Resolved from cfg.DATA_DIR when assistant was imported, so it needs
         # moving on its own.
         self.patch_attr(assistant, "SESSION_FILE", data_dir / "assistant.json")
+
+        # ggml keeps its own DATA_DIR (config imports ggml, so ggml cannot read
+        # config's back), and its BIN_DIR/MODELS_DIR are derived from it. Isolate
+        # them too, or a machine with a real whisper or model installed fails the
+        # "nothing is installed yet" tests.
+        self.patch_attr(ggml, "DATA_DIR", data_dir)
+        self.patch_attr(ggml, "BIN_DIR", data_dir / "bin")
+        self.patch_attr(ggml, "MODELS_DIR", data_dir / "models")
 
         i18n.set_language("en")
         self.addCleanup(i18n.set_language, "en")

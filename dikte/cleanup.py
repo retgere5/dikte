@@ -240,7 +240,12 @@ def _output(cmd, timeout, service, input_text=None):
         raise CleanupError(t("Could not run {binary}: {error}",
                              binary=binary, error=exc)) from exc
     if done.returncode != 0:
-        raise CleanupError(assistant.last_line(done.stderr) or t(
+        # A CLI that authenticates or configures itself on the way up writes
+        # that failure to stdout, not stderr: claude reports an expired login
+        # as "Failed to authenticate ..." on stdout with an empty stderr. Fall
+        # back to stdout so the indicator shows the reason, not a bare code.
+        detail = assistant.last_line(done.stderr) or assistant.last_line(done.stdout)
+        raise CleanupError(detail or t(
             "{service} exited with code {code}.",
             service=service, code=done.returncode))
     return (done.stdout or "").strip()

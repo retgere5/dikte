@@ -274,8 +274,8 @@ def _ask_claude(prompt, conf, session, on_stage, should_stop):
                     found["answer"] = answer
                 found["warning"] = _denial_warning(event)
 
-        code, stderr = _stream(cmd, conf, on_event, should_stop, input_text=prompt)
-    return _conclude(found, code, stderr, session, "Claude")
+        code, stderr, tail = _stream(cmd, conf, on_event, should_stop, input_text=prompt)
+    return _conclude(found, code, stderr, session, "Claude", tail=tail)
 
 
 def _claude_label(block):
@@ -345,8 +345,8 @@ def _ask_codex(prompt, conf, session, on_stage, should_stop):
             found["failure"] = (error.get("message") if isinstance(error, dict)
                                 else str(error)) or t("Codex ended with an error.")
 
-    code, stderr = _stream(cmd, conf, on_event, should_stop, input_text=body)
-    return _conclude(found, code, stderr, session, "Codex")
+    code, stderr, tail = _stream(cmd, conf, on_event, should_stop, input_text=body)
+    return _conclude(found, code, stderr, session, "Codex", tail=tail)
 
 
 def _codex_label(item):
@@ -437,11 +437,16 @@ def _stream(cmd, conf, on_event, should_stop, input_text=None):
     )
     watchdog.start()
 
+    last_plain = ""
     try:
         for line in proc.stdout:
             line = line.strip()
-            # Both CLIs print the odd unstructured line among the JSON.
+            # Both CLIs print the odd unstructured line among the JSON; the last
+            # one matters when the run fails before it streams, since a CLI that
+            # cannot authenticate says so there in plain text, not as an event.
             if not line.startswith("{"):
+                if line:
+                    last_plain = line
                 continue
             try:
                 event = json.loads(line)
@@ -458,15 +463,15 @@ def _stream(cmd, conf, on_event, should_stop, input_text=None):
     if ended["timed_out"]:
         raise AssistantError(t("It did not finish within {seconds} seconds.",
                                seconds=conf["assistant_timeout"]))
-    return proc.returncode, stderr
+    return proc.returncode, stderr, last_plain
 
 
-def _conclude(found, code, stderr, session, service):
+def _conclude(found, code, stderr, session, service, tail=""):
     """Turn what the stream said into an answer, or into the reason there is none."""
     if code != 0 and not found["answer"]:
         if session and _session_missing(stderr):
             raise _SessionGone()
-        raise AssistantError(last_line(stderr) or found["failure"] or t(
+        raise AssistantError(last_line(stderr) or found["failure"] or tail or t(
             "{service} exited with code {code}.", service=service, code=code))
     if found["failure"] and not found["answer"]:
         raise AssistantError(found["failure"])

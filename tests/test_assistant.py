@@ -64,9 +64,9 @@ class Stream(DikteTest):
             self.popen_mock(popen)
             assistant._stream(["claude", "-p"], self.config(),
                               lambda event: None, lambda: False)
-        self.assertEqual(popen.call_args.kwargs.get("creationflags"),
-                         spawn.flags())
-        self.assertNotEqual(popen.call_args.kwargs.get("creationflags"), 0)
+            self.assertEqual(popen.call_args.kwargs.get("creationflags"),
+                             spawn.flags())
+            self.assertNotEqual(popen.call_args.kwargs.get("creationflags"), 0)
 
     def test_no_console_flag_off_windows(self):
         with mock.patch.object(sys, "platform", "linux"), \
@@ -327,6 +327,14 @@ class Conclude(DikteTest):
         with self.assertRaises(assistant.AssistantError) as caught:
             assistant._conclude(self.found(), 1, "it all went wrong\n", "", "Claude")
         self.assertIn("it all went wrong", str(caught.exception))
+
+    def test_a_plain_stdout_line_shows_when_stderr_is_silent(self):
+        # claude prints an expired login to stdout with an empty stderr; the
+        # last such line is the reason to show, not a bare exit code.
+        with self.assertRaises(assistant.AssistantError) as caught:
+            assistant._conclude(self.found(), 1, "", "", "Claude",
+                                tail="Failed to authenticate")
+        self.assertIn("Failed to authenticate", str(caught.exception))
 
     def test_a_session_that_is_gone_is_raised_apart(self):
         with self.assertRaises(assistant._SessionGone):

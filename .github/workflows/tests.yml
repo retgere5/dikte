@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, windows-port-portfolio]
   pull_request:
 
 jobs:

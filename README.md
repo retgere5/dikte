@@ -18,6 +18,8 @@ newer, and PyQt6.
 > macOS backends. See **[README.windows.md](README.windows.md)** to get started
 > on Windows. Upstream: [yusufipk/dikte](https://github.com/yusufipk/dikte).
 
+[![tests](https://github.com/retgere5/dikte/actions/workflows/tests.yml/badge.svg?branch=windows-port-portfolio)](https://github.com/retgere5/dikte/actions/workflows/tests.yml)
+
 <p align="center">
   <img src="docs/settings-general.webp" width="820" alt="Dikte settings, General tab">
 </p>

@@ -59,7 +59,12 @@ class Stream(DikteTest):
         popen.return_value.poll.return_value = 0
 
     def test_it_runs_without_a_console_window_on_windows(self):
+        # spawn.resolve must be stubbed: with sys.platform faked to win32 on a
+        # real Linux runner, shutil.which reaches _winapi (absent there) and
+        # raises. In production the fake is never on, so which stays on its own
+        # platform's path.
         with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(assistant.spawn, "resolve", lambda cmd: cmd), \
                 mock.patch.object(assistant.subprocess, "Popen") as popen:
             self.popen_mock(popen)
             assistant._stream(["claude", "-p"], self.config(),
